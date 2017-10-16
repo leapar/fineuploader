@@ -92,11 +92,11 @@
         element: document.getElementById("uploader"),
         //element: document.getElementById("fineuploader-container"),
         request: {
-            endpoint: "http://127.0.0.1:8080/upload"
+            endpoint: "/upload"
         },
         deleteFile: {
             enabled: true,
-            endpoint: "http://127.0.0.1:8080/upload"
+            endpoint: "/upload"
         },
         maxConnections:5,
         chunking: {
@@ -105,7 +105,7 @@
                 enabled: true
             },
             success: {
-                endpoint: "http://127.0.0.1:8080/chunksdone"
+                endpoint: "/chunksdone"
             }
         },
         resume: {
