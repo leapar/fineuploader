@@ -36,7 +36,7 @@ type uploadRet struct {
 var chunckSize = flag.Uint64("c", 2*1024*1024, "chunk size,defaults to 2*1024*1024")
 var filePath = flag.String("f", "", "Upload file Path")
 var conNum = flag.Int("n", 5, "Batch Connections,defaults to 5")
-var host = flag.String("h", "39.108.125.90:8081", "Upload host Path")
+var host = flag.String("h", "172.29.231.80:8081", "Upload host Path")
 
 var indexMap map[int]int
 var pool chan uploadResult
