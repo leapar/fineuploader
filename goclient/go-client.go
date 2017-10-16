@@ -15,7 +15,8 @@ import (
 	"crypto/md5"
 	"math"
 	"sync"
-
+	"flag"
+	"log"
 	"encoding/json"
 )
 
@@ -32,21 +33,16 @@ type uploadRet struct {
 	Success bool `json:"success"`
 }
 
+var chunckSize = flag.Uint64("c", 2*1024*1024, "chunk size,defaults to 2*1024*1024")
+var filePath = flag.String("f", "", "Upload file Path")
+var conNum = flag.Int("n", 5, "Batch Connections,defaults to 5")
+var host = flag.String("h", "39.108.125.90:8081", "Upload host Path")
+
 var indexMap map[int]int
 var pool chan uploadResult
 var locker sync.Mutex
 func init() {
-	pool = make(chan uploadResult, 5)
-	client := &http.Client{
-		Transport: &tsdbrelayHTTPTransport{
-			&httpcontrol.Transport{
-				RequestTimeout:      time.Minute,
-				DisableKeepAlives:   false,
-				MaxIdleConnsPerHost: 5,
-			},
-		},
-	}
-	http.DefaultClient = client
+
 }
 
 func upload(file string,fuid string,filename string,qqtotalfilesize int64,qqpartindex int, qqpartbyteoffset int64,qqchunksize int64,qqtotalparts int ) {
@@ -57,7 +53,7 @@ func upload(file string,fuid string,filename string,qqtotalfilesize int64,qqpart
 			qqpartindex,
 			bResult,
 		}
-		fmt.Println("upload over:",qqpartindex)
+		//fmt.Println("upload over:",qqpartindex)
 	}()
 
 	var b bytes.Buffer
@@ -142,7 +138,9 @@ func upload(file string,fuid string,filename string,qqtotalfilesize int64,qqpart
 	w.Close()
 
 	//body := bytes.NewBuffer(reader.buf.Bytes())
-	req, err := http.NewRequest("POST", "HTTP://39.108.125.90:8081/upload", &b)//HTTP://127.0.0.1:8081/upload
+
+
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/upload",*host), &b)//HTTP://127.0.0.1:8081/upload
 	if err != nil {
 		///verbose("bosun connect error: %v", err)
 		return
@@ -155,7 +153,11 @@ func upload(file string,fuid string,filename string,qqtotalfilesize int64,qqpart
 		return
 	}
 	buf, err := ioutil.ReadAll(resp.Body)
-	fmt.Printf("%s -- %v\n", string(buf), err)
+	if err != nil {
+		fmt.Printf("%s -- %v\n", string(buf), err)
+	}
+
+
 	resp.Body.Close()
 	if err != nil {
 		return
@@ -224,7 +226,7 @@ func uploadDone(fuid string,filename string,qqtotalfilesize int64,qqtotalparts i
 	w.Close()
 
 	//body := bytes.NewBuffer(reader.buf.Bytes())
-	req, err := http.NewRequest("POST", "HTTP://39.108.125.90:8081/chunksdone", &b)//"HTTP://127.0.0.1:8081/chunksdone
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/chunksdone",*host), &b)//"HTTP://127.0.0.1:8081/chunksdone
 	if err != nil {
 		///verbose("bosun connect error: %v", err)
 		return
@@ -237,13 +239,16 @@ func uploadDone(fuid string,filename string,qqtotalfilesize int64,qqtotalparts i
 		return
 	}
 	buf, err := ioutil.ReadAll(resp.Body)
-	fmt.Printf("%s -- %v\n", string(buf), err)
+	if err != nil {
+		fmt.Printf("%s -- %v\n", string(buf), err)
+	}
+
 	resp.Body.Close()
 	//verbose("bosun relay success")
 
 }
 
-func test(file string) {
+func uploadAll(file string) {
 	/*
 	1. 判断文件大小
 	2. 如果文件大于chuncksize 进行分片
@@ -251,18 +256,28 @@ func test(file string) {
 	4. 获取已经上传完成的分片id
 
 	*/
-	const filechunk uint64 = 2*1024*1024 //1024// we settle for 8KB
+	log.Printf("Start upload File: %s\n",file)
+	var filechunk uint64 = *chunckSize//2*1024*1024 //1024// we settle for 8KB
 	//file := "D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"//"C:\\Users\\wangxh\\Pictures\\1.png"//"D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"
 	uid := uuid.NewV4()
-	fmt.Printf("UUIDv4: %s\n", uid)
+	//fmt.Printf("UUIDv4: %s\n", uid)
 	finfo, error := os.Stat(file)
-	fmt.Println(finfo.Size(),finfo.Name(),error)
+	if error != nil {
+		fmt.Println(finfo.Size(),finfo.Name(),error)
+	}
+
 	//checksum2 := checksum(file,filechunk)
 	//fmt.Printf("%s checksum is %x\n", file,checksum2)
 	//uid,err := uuid.FromString(checksum2)
 	//fmt.Println(err)
 
+	if finfo.Size() <= int64(*conNum)*(int64(filechunk)) {
+		*conNum = int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
+	}
+
 	//fmt.Println(math.Ceil(3.0/2.0))
+
+
 	indexMap = make(map[int]int)
 	qqtotalparts := int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
 	for i := 0; i < int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk)))); i++  {
@@ -272,9 +287,9 @@ func test(file string) {
 
 	var wg sync.WaitGroup
 
-	wg.Add(5)
+	wg.Add(*conNum)
 
-	for i  := 0; i < 5;i++  {
+	for i  := 0; i < *conNum;i++  {
 		go func(index int) {
 			upload(file,uid.String(),finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),10)
 			//
@@ -320,7 +335,7 @@ func test(file string) {
 
 	uploadDone(uid.String(),finfo.Name(),finfo.Size(),qqtotalparts)
 
-	fmt.Println("upload over")
+	log.Println("upload over")
 }
 
 func checksum(path string ,chuncksize uint64) string {
@@ -355,12 +370,30 @@ func checksum(path string ,chuncksize uint64) string {
 	bytes = hash.Sum(nil)
 	return string(bytes)
 }
-func main() {
 
+
+func main() {
+	flag.Parse()
 	//fmt.Println("ss")
 	//file := "D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"//"C:\\Users\\wangxh\\Pictures\\1.png"//"D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"
+	//"E:\\GYJC\\VNC-5.2.2-Windows.exe"
+	if filePath == nil || len(*filePath) == 0{
+		flag.Usage()
+		return
+	}
+	pool = make(chan uploadResult, *conNum)
+	client := &http.Client{
+		Transport: &tsdbrelayHTTPTransport{
+			&httpcontrol.Transport{
+				RequestTimeout:      time.Minute,
+				DisableKeepAlives:   false,
+				MaxIdleConnsPerHost: *conNum,
+			},
+		},
+	}
+	http.DefaultClient = client
 
-	test("E:\\GYJC\\VNC-5.2.2-Windows.exe")
+	uploadAll(*filePath)
 	//go upload()
 
 	time.Sleep(time.Millisecond * 500)
