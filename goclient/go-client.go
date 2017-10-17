@@ -10,7 +10,7 @@ import (
 	"os"
 	"io"
 	"io/ioutil"
-	"github.com/satori/go.uuid"
+	//"github.com/satori/go.uuid"
 	"strconv"
 	"crypto/md5"
 	"math"
@@ -19,7 +19,8 @@ import (
 	"log"
 	"encoding/json"
 	"github.com/boltdb/bolt"
-
+	"os/signal"
+	"syscall"
 )
 
 type tsdbrelayHTTPTransport struct {
@@ -37,14 +38,27 @@ type uploadRet struct {
 
 type boltUploadStruct struct {
 	CheckSum string
-	Uuid string
+	//Uuid string
 	FilePath string
 	StartTime time.Time
 	OverTime time.Time
 	IsOver bool
+	ChunkSize uint64
 	PartInfo []uploadResult
 	IndexMap map[int]int
 }
+
+const (
+	/*
+	red = iota   // red == 0
+	blue         // blue == 1
+	green        // green == 2
+	*/
+	UPLOAD_FLAG_UNKNOW = 0
+	UPLOAD_FLAG_DOING = -1
+	UPLOAD_FLAG_OK = 1
+)
+
 
 var boltDB *bolt.DB
 
@@ -53,9 +67,10 @@ var filePath = flag.String("f", "", "Upload file Path")
 var conNum = flag.Int("n", 5, "Batch Connections,defaults to 5")
 var host = flag.String("h", "172.29.231.80:8082", "Upload host Path")
 
-
+var chQuit chan os.Signal
 var pool chan uploadResult
 var locker sync.Mutex
+var historyMap map[string]boltUploadStruct
 func init() {
 
 }
@@ -302,70 +317,84 @@ func uploadAll(file string) {
 	boltInfo.FilePath = file
 	boltInfo.IsOver = false
 	//boltInfo.OverTime = null
-
+	if value, ok := historyMap[boltInfo.CheckSum]; ok {
+		boltInfo = value
+		if value.IsOver == true {
+			log.Println("already upload over")
+			return
+		}
+	}
 
 	var filechunk uint64 = *chunckSize//2*1024*1024 //1024// we settle for 8KB
+	var cNum int = *conNum
+	if boltInfo.ChunkSize > 0 {
+		filechunk = boltInfo.ChunkSize
+	}
+
 	//file := "D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"//"C:\\Users\\wangxh\\Pictures\\1.png"//"D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"
-	uid := uuid.NewV4()
+	//uid := uuid.NewV4()
+	//uid,err = uuid.FromString(boltInfo.CheckSum)
 	//fmt.Printf("UUIDv4: %s\n", uid)
 	finfo, err := os.Stat(file)
 	if err != nil {
 		fmt.Println(finfo.Size(),finfo.Name(),err)
 	}
 
-	boltInfo.Uuid = uid.String()
+	//boltInfo.Uuid = uid.String()
 	boltInfo.StartTime = time.Now()
-
-
-
-
-
-
+	boltInfo.ChunkSize = filechunk
 	//checksum2 := checksum(file,filechunk)
 	//fmt.Printf("%s checksum is %x\n", file,checksum2)
-	//uid,err := uuid.FromString(checksum2)
+
 	//fmt.Println(err)
 
-	if finfo.Size() <= int64(*conNum)*(int64(filechunk)) {
-		*conNum = int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
+	if finfo.Size() <= int64(cNum)*(int64(filechunk)) {
+		cNum = int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
 	}
 
 	//fmt.Println(math.Ceil(3.0/2.0))
 
-
-	boltInfo.IndexMap = make(map[int]int)
 	qqtotalparts := int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
-	for i := 0; i < int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk)))); i++  {
-		boltInfo.IndexMap[i] = 0
+
+	if len(boltInfo.IndexMap) == 0 {
+		boltInfo.IndexMap = make(map[int]int)
+
+		for i := 0; i < int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk)))); i++  {
+			boltInfo.IndexMap[i] = UPLOAD_FLAG_UNKNOW
+		}
 	}
+
 
 
 	var wg sync.WaitGroup
 
-	wg.Add(*conNum)
+	wg.Add(cNum)
 
-	for i  := 0; i < *conNum;i++  {
+	for i  := 0; i < cNum;i++  {
 		go func(index int) {
-			upload(file,uid.String(),finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),10)
+			upload(file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),10)
 			//
 		}(i)
 	}
 	go func() {
 		for {
 			select {
+			case <-chQuit:
+				wg.Add(-cNum)
+				return
 			case r := <-pool:
 				//fmt.Println("Acquire:共享资源",r.index)
 				var index = -1
 				locker.Lock()
 				if r.isok {
 					//delete(indexMap,r.index)
-					boltInfo.IndexMap[r.index] = 1
+					boltInfo.IndexMap[r.index] = UPLOAD_FLAG_OK
 				} else {
-					boltInfo.IndexMap[r.index] = 0
+					boltInfo.IndexMap[r.index] = UPLOAD_FLAG_UNKNOW
 				}
 				for i,v := range boltInfo.IndexMap {
-					if v == 0 {
-						boltInfo.IndexMap[i] = -1
+					if v == UPLOAD_FLAG_UNKNOW {
+						boltInfo.IndexMap[i] = UPLOAD_FLAG_DOING
 						index = i
 						break
 					}
@@ -377,23 +406,34 @@ func uploadAll(file string) {
 					if finfo.Size() <= int64(uint64(index+1) * filechunk) {
 						size = finfo.Size() - int64(uint64(index) * filechunk)
 					}
-					upload(file,uid.String(),finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(size),qqtotalparts)
+					upload(file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(size),qqtotalparts)
 				} else {
+
 					wg.Done()
 				}
 				//	default:
-
 			}
 		}
 	}()
 
 	wg.Wait()
 
-	uploadDone(uid.String(),finfo.Name(),finfo.Size(),qqtotalparts)
+	var allOver bool = true
+	for _,v := range boltInfo.IndexMap {
+		if v != 1 {
+			allOver = false
+			break
+		}
+	}
 
-	log.Println("upload over")
-	boltInfo.IsOver = true
-	boltInfo.OverTime = time.Now()
+	if allOver {
+		uploadDone(boltInfo.CheckSum,finfo.Name(),finfo.Size(),qqtotalparts)
+		boltInfo.IsOver = true
+		log.Println("upload over")
+		boltInfo.OverTime = time.Now()
+	} else {
+		log.Println("exit....")
+	}
 
 }
 
@@ -423,11 +463,14 @@ func checksum(path string ,chuncksize uint64) string {
 		file.Read(buf)
 		io.WriteString(hash, string(buf)) // append into the hash
 	}
-
-	fmt.Printf("%s checksum is %x\n", file.Name(), hash.Sum(nil))
 	var bytes []byte
 	bytes = hash.Sum(nil)
-	return string(bytes)
+	retStr := fmt.Sprintf("%x",bytes)
+	fmt.Printf("%s checksum is %x %s \n", file.Name(), bytes, retStr )
+
+
+
+	return retStr
 }
 
 
@@ -440,17 +483,37 @@ func main() {
 		return
 	}
 	defer boltDB.Close()
+	historyMap = make(map[string]boltUploadStruct)
 
-	/*boltDB.View(func(tx *bolt.Tx) error {
+	boltDB.View(func(tx *bolt.Tx) error {
 		bk := tx.Bucket([]byte("upload"))
 
-		c := bk.Cursor()
-		for k, v := c.First(); k != nil; k, v = c.Next() {
-			fmt.Printf("key=%s, value=%s\n", k, v)
+		if err := bk.ForEach(func(k, v []byte) error {
+
+			//fmt.Printf("A %s is %s.\n", k, v)
+			bolt := boltUploadStruct{}
+			json.Unmarshal(v,&bolt)
+			historyMap[string(k)] = bolt
+			fmt.Printf("%s: %t.\t %s-%s  \n", bolt.FilePath, bolt.IsOver, bolt.StartTime, bolt.OverTime)
+			return nil
+		}); err != nil {
+			return err
 		}
 		return nil
 	})
-*/
+
+	/*clear
+	boltDB.Update(func(tx *bolt.Tx) error {
+		bk := tx.Bucket([]byte("upload"))
+
+		for key, _ := range historyMap {
+			bk.Delete([]byte(key))
+		}
+
+		return nil
+	})
+	*/
+
 	//fmt.Println("ss")
 	//file := "D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"//"C:\\Users\\wangxh\\Pictures\\1.png"//"D:\\DOTA2Setup\\DOTA2Setup20160201\\Dota2.7z.001"
 	//"E:\\GYJC\\VNC-5.2.2-Windows.exe"
@@ -469,9 +532,13 @@ func main() {
 		},
 	}
 	http.DefaultClient = client
-
+	chQuit = make(chan os.Signal, 1)
+	signal.Notify(chQuit, syscall.SIGINT, syscall.SIGTERM)
+	//log.Println(<-ch)
 	uploadAll(*filePath)
 	//go upload()
 
-	time.Sleep(time.Millisecond * 500)
+	//time.Sleep(time.Millisecond * 500)
+
+	///Users/wangxiaohua/Downloads/AIA-SWEXSYS.ppt
 }
