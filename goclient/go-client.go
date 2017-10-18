@@ -17,7 +17,7 @@ var host = flag.String("h", "172.29.231.80:8082", "Upload host Path")
 
 func main() {
 	flag.Parse()
-	boltDB, err := bolt.Open("my.db", 0600, nil)
+	boltDB, err := bolt.Open("uploader.db", 0600, nil)
 	if err != nil {
 		log.Fatal(err)
 		return

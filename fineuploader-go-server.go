@@ -48,6 +48,9 @@ func main() {
 	http.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
+	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, r.URL.Path[1:])
+	})
 	log.Fatal(http.ListenAndServe(hostPort, nil))
 }
 
@@ -128,8 +131,10 @@ func ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
 		errorMsg := fmt.Sprintf("Method [%s] is not supported", req.Method)
 		http.Error(w, errorMsg, http.StatusMethodNotAllowed)
 	}
+
 	uuid := req.FormValue(paramUuid)
 	filename := req.FormValue(paramFileName)
+
 	totalFileSize, err := strconv.Atoi(req.FormValue(paramTotalFileSize))
 	if err != nil {
 		writeHttpResponse(w, http.StatusInternalServerError, err)
@@ -149,17 +154,30 @@ func ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	defer f.Close()
 
+	go ChunksDone(finalFilename,uuid,totalParts,totalFileSize)
+}
+
+func ChunksDone(finalFilename string,uuid string,totalParts int,totalFileSize int) {
+	f, err := os.Create(finalFilename)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer f.Close()
+
 	var totalWritten int64
 	for i := 0; i < totalParts; i++ {
 		part := fmt.Sprintf("%[1]s/%[2]s/%[2]s_%05[3]d", *uploadDir, uuid, i)
 		partFile, err := os.Open(part)
 		if err != nil {
-			writeHttpResponse(w, http.StatusInternalServerError, err)
+			log.Println(err)
+			//writeHttpResponse(w, http.StatusInternalServerError, err)
 			return
 		}
 		written, err := io.Copy(f, partFile)
 		if err != nil {
-			writeHttpResponse(w, http.StatusInternalServerError, err)
+			log.Println(err)
+			//writeHttpResponse(w, http.StatusInternalServerError, err)
 			return
 		}
 		partFile.Close()
@@ -172,7 +190,8 @@ func ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
 
 	if totalWritten != int64(totalFileSize) {
 		errorMsg := fmt.Sprintf("Total file size mistmatch, expected %d bytes but actual is %d", totalFileSize, totalWritten)
-		http.Error(w, errorMsg, http.StatusMethodNotAllowed)
+		//http.Error(w, errorMsg, http.StatusMethodNotAllowed)
+		log.Println(errorMsg)
 	}
 }
 

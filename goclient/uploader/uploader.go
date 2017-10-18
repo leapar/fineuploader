@@ -20,6 +20,9 @@ import (
 	"log"
 	"github.com/facebookgo/httpcontrol"
 	"github.com/gosuri/uiprogress"
+	//"github.com/vbauerster/mpb"
+	//"github.com/vbauerster/mpb/decor"
+
 )
 
 type Uploader struct {
@@ -327,6 +330,17 @@ func (s* Uploader) UploadAll(file string) {
 		3. 启动go rountime
 		4. 获取已经上传完成的分片id
 	*/
+	/*mp := mpb.New()
+	bar2 := mp.AddBar(int64(100),
+		mpb.PrependDecorators(
+			decor.StaticName("sss", 0, decor.DwidthSync|decor.DidentRight),
+			decor.ETA(4, decor.DSyncSpace),
+		),
+		mpb.AppendDecorators(
+			decor.Percentage(5, 0),
+		),
+	)*/
+
 	uiprogress.Start()
 	bar := uiprogress.AddBar(100).AppendCompleted()
 	//bar.AppendCompleted()
@@ -368,6 +382,9 @@ func (s* Uploader) UploadAll(file string) {
 
 	s.boltDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("upload"))
+		if b == nil {
+			return nil
+		}
 		v := b.Get([]byte(boltInfo.CheckSum))
 		//fmt.Printf("%s\n", v)
 		bolt := boltUploadStruct{}
@@ -382,6 +399,7 @@ func (s* Uploader) UploadAll(file string) {
 
 	if boltInfo.IsOver == true {
 		bar.Set(bar.Total)
+		//bar2.Incr(100)
 		log.Println("already upload over")
 		return
 	}
@@ -481,8 +499,9 @@ func (s* Uploader) UploadAll(file string) {
 					//boltInfo.IndexMap[r.index] = UPLOAD_FLAG_OK
 					boltInfo.OverIndex++
 					//bar.Incr()
-
+					//bar2.Incr(int((float64(1) / float64(len(boltInfo.IndexMap)))*100))
 				}
+
 				bar.Set(int((float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))*100))
 			}
 		}
