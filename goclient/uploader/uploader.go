@@ -49,7 +49,7 @@ type uploadRet struct {
 	Success bool `json:"success"`
 }
 
-type boltUploadStruct struct {
+type BoltUploadStruct struct {
 	CheckSum string
 	//Uuid string
 	FilePath string
@@ -346,7 +346,7 @@ func (s* Uploader) UploadAll(file string) {
 	//bar.AppendCompleted()
 	//bar.PrependElapsed()
 
-	boltInfo := boltUploadStruct{}
+	boltInfo := BoltUploadStruct{}
 
 
 
@@ -387,7 +387,7 @@ func (s* Uploader) UploadAll(file string) {
 		}
 		v := b.Get([]byte(boltInfo.CheckSum))
 		//fmt.Printf("%s\n", v)
-		bolt := boltUploadStruct{}
+		bolt := BoltUploadStruct{}
 		err := json.Unmarshal(v,&bolt)
 		if err == nil {
 			boltInfo = bolt
