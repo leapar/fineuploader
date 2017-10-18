@@ -18,6 +18,7 @@ func main() {
 		commands.Download(),
 		commands.List(),
 		commands.Clear(),
+		commands.Delete(),
 	}
 
 	app.Run(os.Args)
