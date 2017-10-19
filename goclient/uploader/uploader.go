@@ -23,6 +23,7 @@ import (
 	//"github.com/vbauerster/mpb"
 	//"github.com/vbauerster/mpb/decor"
 
+	"context"
 )
 
 type Uploader struct {
@@ -105,21 +106,25 @@ func init() {
 
 }
 
-func (s* Uploader) upload(file string,fuid string,filename string,qqtotalfilesize int64,qqpartindex int, qqpartbyteoffset int64,qqchunksize int64,qqtotalparts int ) {
+func (s* Uploader) upload(ctx context.Context,file string,fuid string,filename string,qqtotalfilesize int64,qqpartindex int, qqpartbyteoffset int64,qqchunksize int64,qqtotalparts int ) {
 	var bResult bool = false
 
 	if fuid == "" {
 		fmt.Println("fuid  nil")
 	}
 	defer func() {
-		s.pool <- uploadResult {
-			qqpartindex,
-			bResult,
-		}
-
-		s.progress <- uploadResult {
-			qqpartindex,
-			bResult,
+		select {
+		case <-ctx.Done():
+			_ = ctx.Err()
+		default:
+			s.pool <- uploadResult{
+				qqpartindex,
+				bResult,
+			}
+			s.progress <- uploadResult{
+				qqpartindex,
+				bResult,
+			}
 		}
 		//fmt.Println("upload over:",qqpartindex)
 	}()
@@ -218,6 +223,8 @@ func (s* Uploader) upload(file string,fuid string,filename string,qqtotalfilesiz
 		///verbose("bosun connect error: %v", err)
 		return
 	}
+
+	req = req.WithContext(ctx)
 	// Don't forget to set the content type, this will contain the boundary.
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := http.DefaultClient.Do(req)
@@ -324,6 +331,9 @@ func (s* Uploader) UploadAll(file string) {
 	//fmt.Println("UploadAll")
 
 
+	ctx,cancel := context.WithCancel(context.Background())
+
+
 	/*
 		1. 判断文件大小
 		2. 如果文件大于chuncksize进行分片
@@ -354,25 +364,7 @@ func (s* Uploader) UploadAll(file string) {
 	defer func() {
 		//fmt.Println("uiprogress.Stop()")
 		uiprogress.Stop()
-		//https://bl.ocks.org/joyrexus/22c3ef0984ed957f54b9
-		err := s.boltDB.Update(func(tx *bolt.Tx) error {
-			upload, err := tx.CreateBucketIfNotExists([]byte("upload"))
-			if err != nil {
-				return fmt.Errorf("create bucket: %s", err)
-			}
 
-			enc, err1 := json.Marshal(boltInfo)
-			if err1 != nil {
-				return err1
-			}
-
-			err = upload.Put([]byte(boltInfo.CheckSum), enc)
-			return err
-		})
-
-		if err != nil {
-			fmt.Printf("save data error:%v",err)
-		}
 	}()
 	log.Printf("Start upload File: %s\n",file)
 
@@ -445,7 +437,7 @@ func (s* Uploader) UploadAll(file string) {
 	qqtotalparts := int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
 
 	var wg sync.WaitGroup
-	wg.Add(cNum)
+	wg.Add(2)
 
 
 	if len(boltInfo.IndexMap) == 0 {
@@ -457,7 +449,7 @@ func (s* Uploader) UploadAll(file string) {
 
 		for i  := 0; i < cNum;i++  {
 			go func(index int) {
-				s.upload(file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
+				s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
 				//
 			}(i)
 		}
@@ -476,7 +468,7 @@ func (s* Uploader) UploadAll(file string) {
 			if value != UPLOAD_FLAG_OK  && inum < cNum {
 				inum++
 				go func(index int) {
-					s.upload(file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
+					s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
 					//
 				}(key)
 			}
@@ -487,6 +479,9 @@ func (s* Uploader) UploadAll(file string) {
 
 	quitSignal := make(chan int,1)
 	go func() {
+		defer func() {
+			wg.Done()
+		}()
 		for {
 			select {
 			case <-quitSignal:
@@ -524,15 +519,15 @@ func (s* Uploader) UploadAll(file string) {
 
 
 	go func() {
+		defer func() {
+			quitSignal <- 1
+			wg.Done()
+		}()
+		overIndex := 0
 		for {
 			select {
 			case <-s.chQuit:
-				quitSignal <- 1
-				wg.Done()
-				wg.Done()
-				wg.Done()
-				wg.Done()
-				wg.Done()
+				cancel()
 				//wg.Add(-cNum)
 				fmt.Println("chQuit")
 				return
@@ -561,9 +556,13 @@ func (s* Uploader) UploadAll(file string) {
 					if finfo.Size() <= int64(uint64(index+1) * filechunk) {
 						size = finfo.Size() - int64(uint64(index) * filechunk)
 					}
-					go s.upload(file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(size),qqtotalparts)
+					go s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(size),qqtotalparts)
 				} else {
-					wg.Done()
+					overIndex++
+					if overIndex == cNum {
+						return
+					}
+
 				}
 				//	default:
 			}
@@ -571,6 +570,7 @@ func (s* Uploader) UploadAll(file string) {
 	}()
 
 	wg.Wait()
+
 
 	var allOver bool = true
 	for _,v := range boltInfo.IndexMap {
@@ -587,6 +587,26 @@ func (s* Uploader) UploadAll(file string) {
 		boltInfo.OverTime = time.Now()
 	} else {
 		log.Println("exit....")
+	}
+
+	//https://bl.ocks.org/joyrexus/22c3ef0984ed957f54b9
+	err = s.boltDB.Update(func(tx *bolt.Tx) error {
+		upload, err := tx.CreateBucketIfNotExists([]byte("upload"))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+
+		enc, err1 := json.Marshal(boltInfo)
+		if err1 != nil {
+			return err1
+		}
+
+		err = upload.Put([]byte(boltInfo.CheckSum), enc)
+		return err
+	})
+
+	if err != nil {
+		fmt.Printf("save data error:%v",err)
 	}
 
 }
