@@ -10,6 +10,13 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+
+	"gopkg.in/mgo.v2"
+
+	"bytes"
+	"io/ioutil"
+	"gopkg.in/mgo.v2/bson"
+	"time"
 )
 
 var port = flag.Int("p", 8080, "Port number to listen to, defaults to 8080")
@@ -36,7 +43,7 @@ type UploadResponse struct {
 	Error        string `json:"error,omitempty"`
 	PreventRetry bool   `json:"preventRetry"`
 }
-
+var gridFs *mgo.GridFS
 func main() {
 	flag.Parse()
 	hostPort := fmt.Sprintf("0.0.0.0:%d", *port)
@@ -51,11 +58,34 @@ func main() {
 	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
+	session, err := mgo.Dial("127.0.0.1:27017")
+	if err != nil {
+		log.Println("[grid]mgo.Dial ", err)
+		return
+	}
+
+	database := session.DB("test")
+	gridFs = database.GridFS("uploader")
+
+/*
+	file ,err := gridFs.Create("test.data")
+
+	file.SetChunkSize(128)
+	file.Write(make([]byte,1024))
+	//file.Seek(5,os.SEEK_SET)
+	//file.Write([]byte("test"))
+	file.SetMeta(&struct{ A string
+	B string } {
+		A:"a",
+		B:"b",
+	})
+	file.Close()*/
+	defer session.Close()
+
+
+
 	log.Fatal(http.ListenAndServe(hostPort, nil))
 }
-
-
-
 
 func UploadHandler(w http.ResponseWriter, req *http.Request) {
 	switch req.Method {
@@ -68,6 +98,17 @@ func UploadHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	errorMsg := fmt.Sprintf("Method [%s] is not supported:", req.Method)
 	http.Error(w, errorMsg, http.StatusMethodNotAllowed)
+}
+
+type passthru struct {
+	io.ReadCloser
+	buf bytes.Buffer
+}
+
+func (p *passthru) Read(b []byte) (int, error) {
+	n, err := p.ReadCloser.Read(b)
+	p.buf.Write(b[:n])
+	return n, err
 }
 
 func upload(w http.ResponseWriter, req *http.Request) {
@@ -105,12 +146,116 @@ func upload(w http.ResponseWriter, req *http.Request) {
 	}
 	defer outfile.Close()
 
-	_, err = io.Copy(outfile, file)
+
+	datas,err := ioutil.ReadAll(file)
+
+
+	buf := bytes.NewBuffer(datas)
+/*
+	if _, err := io.Copy(buf, file); err != nil {
+		return
+	}
+*/
+
+
+	///_, err = io.Copy(outfile, file)
+	_, err = io.Copy(outfile, buf)
 	if err != nil {
 		writeUploadResponse(w, err)
 		return
 	}
+/*
+	gridFile, err := gridFs.Open(req.FormValue(paramFileName))
+	if err != nil {
+		gridFile, err = gridFs.Create(req.FormValue(paramFileName))
+		chunkSize,err := strconv.Atoi(req.FormValue(paramChunkSize))
+		if err != nil {
+			log.Println("strconv.Atoi(req.FormValue(paramChunkSize))")
+		}
+		gridFile.SetChunkSize(chunkSize)
+		totalSize,err := strconv.Atoi(req.FormValue(paramTotalFileSize))
+		totalSize = 1*1024*1024*1024
+		if err != nil {
+			log.Println("strconv.Atoi(req.FormValue(paramTotalFileSize))")
+		}
 
+		totalPart,err := strconv.Atoi(req.FormValue(paramTotalParts))
+		totalPart = 512
+		if err != nil {
+			log.Println("strconv.Atoi(req.FormValue(paramTotalFileSize))")
+		}
+		for i := 0; i < totalPart - 1;  i++{
+			gridFile.Write(make([]byte,chunkSize))
+		}
+		gridFile.Write(make([]byte,totalSize-chunkSize*(totalPart-1)))
+		gridFile.Close()
+
+
+
+	} else {
+		gridFile.Close()
+	}
+*/
+	if len(partIndex) == 0 {
+		filename = fmt.Sprintf("%s",  headers.Filename)
+
+	} else {
+		filename = fmt.Sprintf("%s_%05s", uuid, partIndex)
+	}
+	gridFile, err := gridFs.Create(/*req.FormValue(paramFileName)*/filename)
+	chunkSize,err := strconv.Atoi(req.FormValue(paramChunkSize))
+	if err != nil {
+		log.Println("strconv.Atoi(req.FormValue(paramChunkSize))")
+		gridFile.SetChunkSize(len(datas))
+	} else {
+		gridFile.SetChunkSize(chunkSize)
+	}
+
+
+	//gridFile.Seek(int64(offset),os.SEEK_SET)
+
+
+	totalSize,err := strconv.Atoi(req.FormValue(paramTotalFileSize))
+
+	if err != nil {
+		log.Println("strconv.Atoi(req.FormValue(paramTotalFileSize))")
+		totalSize = len(datas)
+	}
+
+	totalPart,err := strconv.Atoi(req.FormValue(paramTotalParts))
+
+	if err != nil {
+		log.Println("strconv.Atoi(req.FormValue(paramTotalFileSize))")
+		totalPart = 1
+	}
+
+	offset,err := strconv.Atoi(req.FormValue(paramPartBytesOffset))
+	if err != nil {
+		offset = 0
+	}
+	index,err := strconv.Atoi(partIndex)
+	if err != nil {
+		index = 0
+	}
+	gridFile.SetMeta(&struct{
+		Index int
+		Uuid string
+		Filename string
+		ChunkSize int
+		TotalSize int
+		TotalPart int
+		Offset int} {
+		Uuid:uuid,
+		Filename:req.FormValue(paramFileName),
+		ChunkSize: chunkSize,
+		TotalSize:totalSize,
+		TotalPart:totalPart,
+		Offset:offset,
+		Index:index,
+	})
+	gridFile.Write(datas)
+
+	defer gridFile.Close()
 	writeUploadResponse(w, nil)
 }
 
@@ -154,10 +299,84 @@ func ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
 	}
 	defer f.Close()
 
-	go ChunksDone(finalFilename,uuid,totalParts,totalFileSize)
+	type gfsFile struct {
+		Id          interface{} "_id"
+		ChunkSize   int         "chunkSize"
+		UploadDate  time.Time   "uploadDate"
+		Length      int64       ",minsize"
+		MD5         string
+		Filename    string    ",omitempty"
+		ContentType string    "contentType,omitempty"
+		Metadata    *bson.Raw ",omitempty"
+	}
+	var objFile []gfsFile
+	gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).All(&objFile)
+	//count,err := gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).Count()
+
+	var ids map[bson.ObjectId]int
+	ids = make(map[bson.ObjectId]int)
+	var chunkSize int
+	for key, value := range objFile {
+		fmt.Println(key)
+		result := struct {
+			Index int
+			Uuid string
+			Filename string
+			ChunkSize int
+			TotalSize int
+			TotalPart int
+			Offset int
+		}{}
+		err = bson.Unmarshal(value.Metadata.Data, &result)
+		fmt.Println(result)
+		oid, ok := value.Id.(bson.ObjectId)
+		if !ok  {
+			fmt.Println(ok)
+		}
+		ids[oid] = result.Index
+
+		if chunkSize == 0 {
+			chunkSize = result.ChunkSize
+		}
+
+
+		err := gridFs.Files.Remove(bson.M{"_id": value.Id})
+		if err != nil {
+			fmt.Println(err)
+		}
+
+
+	}
+	fmt.Println(ids)
+
+	finalId := bson.NewObjectId()
+	doneFile := &gfsFile {
+		Id:finalId,
+		UploadDate: bson.Now(),
+		Length: int64(totalFileSize),
+		ChunkSize: chunkSize,
+		Filename:filename,
+		MD5:uuid,
+	}
+
+	err = gridFs.Files.Insert(doneFile)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	for id, value := range ids {
+		err := gridFs.Chunks.Update(bson.M{"files_id":id}, bson.M{"$set": bson.M{ "files_id": finalId,"n":value, }})
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+
+	//gridFs.Chunks.UpdateAll()
+
+	go ChunksDone(finalFilename, uuid, totalParts, totalFileSize)
 }
 
-func ChunksDone(finalFilename string,uuid string,totalParts int,totalFileSize int) {
+func ChunksDone(finalFilename string, uuid string, totalParts int, totalFileSize int) {
 	f, err := os.Create(finalFilename)
 	if err != nil {
 		log.Println(err)

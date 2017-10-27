@@ -15,3 +15,5 @@
 fineuploader
 .idea
 .idea/
+uploads/
+goclient/uploader.db

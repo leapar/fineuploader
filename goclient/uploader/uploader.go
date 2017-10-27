@@ -58,7 +58,7 @@ type BoltUploadStruct struct {
 	OverTime time.Time
 	IsOver bool
 	ChunkSize uint64
-	PartInfo []uploadResult
+	//PartInfo []uploadResult
 	IndexMap map[int]int
 
 	OverIndex int
