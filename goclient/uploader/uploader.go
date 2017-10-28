@@ -24,6 +24,7 @@ import (
 	//"github.com/vbauerster/mpb/decor"
 
 	"context"
+	"github.com/satori/go.uuid"
 )
 
 type Uploader struct {
@@ -372,22 +373,25 @@ func (s* Uploader) UploadAll(file string) {
 	boltInfo.FilePath = file
 	boltInfo.IsOver = false
 
-	s.boltDB.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("upload"))
-		if b == nil {
-			return nil
-		}
-		v := b.Get([]byte(boltInfo.CheckSum))
-		//fmt.Printf("%s\n", v)
-		bolt := BoltUploadStruct{}
-		err := json.Unmarshal(v,&bolt)
-		if err == nil {
-			boltInfo = bolt
-			fmt.Println("start time:",boltInfo.StartTime)
-		}
+	if s.boltDB != nil {
+		s.boltDB.View(func(tx *bolt.Tx) error {
+			b := tx.Bucket([]byte("upload"))
+			if b == nil {
+				return nil
+			}
+			v := b.Get([]byte(boltInfo.CheckSum))
+			//fmt.Printf("%s\n", v)
+			bolt := BoltUploadStruct{}
+			err := json.Unmarshal(v,&bolt)
+			if err == nil {
+				boltInfo = bolt
+				fmt.Println("start time:",boltInfo.StartTime)
+			}
 
-		return nil
-	})
+			return nil
+		})
+	}
+
 
 	if boltInfo.IsOver == true {
 		bar.Set(bar.Total)
@@ -485,7 +489,7 @@ func (s* Uploader) UploadAll(file string) {
 		for {
 			select {
 			case <-quitSignal:
-				fmt.Println("quitSignal")
+				//fmt.Println("quitSignal")
 				return
 			case r := <-s.progress:
 				//fmt.Println(float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))
@@ -590,28 +594,33 @@ func (s* Uploader) UploadAll(file string) {
 	}
 
 	//https://bl.ocks.org/joyrexus/22c3ef0984ed957f54b9
-	err = s.boltDB.Update(func(tx *bolt.Tx) error {
-		upload, err := tx.CreateBucketIfNotExists([]byte("upload"))
+	if  s.boltDB != nil {
+		err = s.boltDB.Update(func(tx *bolt.Tx) error {
+			upload, err := tx.CreateBucketIfNotExists([]byte("upload"))
+			if err != nil {
+				return fmt.Errorf("create bucket: %s", err)
+			}
+
+			enc, err1 := json.Marshal(boltInfo)
+			if err1 != nil {
+				return err1
+			}
+
+			err = upload.Put([]byte(boltInfo.CheckSum), enc)
+			return err
+		})
+
 		if err != nil {
-			return fmt.Errorf("create bucket: %s", err)
+			fmt.Printf("save data error:%v",err)
 		}
-
-		enc, err1 := json.Marshal(boltInfo)
-		if err1 != nil {
-			return err1
-		}
-
-		err = upload.Put([]byte(boltInfo.CheckSum), enc)
-		return err
-	})
-
-	if err != nil {
-		fmt.Printf("save data error:%v",err)
 	}
+
 
 }
 
 func (s* Uploader) checksum(path string ,chuncksize uint64) string {
+
+	return uuid.NewV4().String()
 
 	file, err := os.Open(path)
 

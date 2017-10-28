@@ -4,6 +4,7 @@ import (
 	"github.com/urfave/cli"
 	"os"
 	"./commands"
+	"sort"
 )
 
 func main() {
@@ -20,6 +21,7 @@ func main() {
 		commands.Clear(),
 		commands.Delete(),
 	}
-
+	sort.Sort(cli.FlagsByName(app.Flags))
+	sort.Sort(cli.CommandsByName(app.Commands))
 	app.Run(os.Args)
 }

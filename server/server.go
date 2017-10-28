@@ -6,13 +6,14 @@ import (
 	"log"
 	"os"
 	"io/ioutil"
-	"bytes"
+	//"bytes"
 	"io"
 	"strconv"
 	"time"
 	"gopkg.in/mgo.v2/bson"
 	"encoding/json"
 	"gopkg.in/mgo.v2"
+	"github.com/rcrowley/go-metrics"
 )
 
 type UploadResponse struct {
@@ -20,6 +21,8 @@ type UploadResponse struct {
 	Error        string `json:"error,omitempty"`
 	PreventRetry bool   `json:"preventRetry"`
 }
+
+
 
 // Chunked request parameters
 const (
@@ -32,6 +35,12 @@ const (
 	paramTotalParts      = "qqtotalparts"     // total parts
 	paramFileName        = "qqfilename"       // file name for chunked requests
 	paramChunkSize       = "qqchunksize"      // size of the chunks
+)
+
+var (
+	errorCount = metrics.NewRegisteredCounter("log.error", metrics.DefaultRegistry)
+
+
 )
 
 type HttpServer struct {
@@ -54,6 +63,7 @@ func New(port int,host string,mongo string,dir string) *HttpServer {
 
 func (srv *HttpServer) Start() {
 	session, err := mgo.Dial(srv.mongo)
+	log.Println("dial mongodb:",srv.mongo)
 	if err != nil {
 		log.Println("[grid]mgo.Dial ", err)
 		return
@@ -69,6 +79,15 @@ func (srv *HttpServer) Start() {
 	http.Handle("/upload/", http.StripPrefix("/upload/", http.HandlerFunc(srv.UploadHandler)))
 	http.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
+	})
+	http.HandleFunc("/res/", func(w http.ResponseWriter, r *http.Request) {
+		//dir := http.Dir("swagger-ui")
+		//fileServer := http.FileServer(dir)
+	//	http.StripPrefix("/doc/", fileServer).ServeHTTP(w, r)
+		http.StripPrefix("/res/", Assets(AssetsOpts{
+			Develop:false,
+		})).ServeHTTP(w, r)
+		//http.ServeFile(w, r, r.URL.Path[1:])
 	})
 	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
@@ -111,13 +130,16 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "No uuid received", http.StatusBadRequest)
 		return
 	}
-	log.Printf("Starting upload handling of request with uuid of [%s]\n", uuid)
+
 	file, headers, err := req.FormFile(paramFile)
 	if err != nil {
+		log.Println(err)
 		srv.writeUploadResponse(w, err)
 		return
 	}
 
+	datas,err := ioutil.ReadAll(file)
+/*
 	fileDir := fmt.Sprintf("%s/%s", srv.dir, uuid)
 	if err := os.MkdirAll(fileDir, 0777); err != nil {
 		srv.writeUploadResponse(w, err)
@@ -134,7 +156,7 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 	}
 	defer outfile.Close()
 
-	datas,err := ioutil.ReadAll(file)
+
 	buf := bytes.NewBuffer(datas)
 
 	///_, err = io.Copy(outfile, file)
@@ -145,13 +167,16 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 	}
 
 
-	filename = fmt.Sprintf("%s",  headers.Filename)
+*/
+
+	filename := fmt.Sprintf("%s",  headers.Filename)
 	totalSize := len(datas)
 	totalPart := 1
 	offset := 0
 	index := 0
 
 	srv.writeGridFile(filename,req.FormValue(paramFileName),uuid,totalSize,totalSize,totalPart,offset,index,datas)
+	//srv.writeChunks(index,datas,uuid,totalSize,totalSize)
 
 	srv.writeUploadResponse(w, nil)
 }
@@ -163,18 +188,22 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "No uuid received", http.StatusBadRequest)
 		return
 	}
-	log.Printf("Starting upload handling of request with uuid of [%s]\n", uuid)
+
 	file, _, err := req.FormFile(paramFile)
 	if err != nil {
+		log.Println(err)
 		srv.writeUploadResponse(w, err)
 		return
 	}
-
-	fileDir := fmt.Sprintf("%s/%s", srv.dir, uuid)
+	datas,err := ioutil.ReadAll(file)
+	/*	fileDir := fmt.Sprintf("%s/%s", srv.dir, uuid)
 	if err := os.MkdirAll(fileDir, 0777); err != nil {
 		srv.writeUploadResponse(w, err)
 		return
 	}
+
+
+
 	partIndex := req.FormValue(paramPartIndex)
 	var filename string
 	filename = fmt.Sprintf("%s/%s_%05s", fileDir, uuid, partIndex)
@@ -185,7 +214,7 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 	}
 	defer outfile.Close()
 
-	datas,err := ioutil.ReadAll(file)
+
 	buf := bytes.NewBuffer(datas)
 
 	///_, err = io.Copy(outfile, file)
@@ -193,18 +222,72 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		srv.writeUploadResponse(w, err)
 		return
-	}
+	}*/
 
-	filename = fmt.Sprintf("%s_%05s.part", uuid, partIndex)
+	//filename := fmt.Sprintf("%s_%05s.part", uuid, partIndex)
 	chunkSize,err := strconv.Atoi(req.FormValue(paramChunkSize))
 	totalSize,err := strconv.Atoi(req.FormValue(paramTotalFileSize))
-	totalPart,err :=  strconv.Atoi(req.FormValue(paramTotalParts))
-	offset,err := strconv.Atoi(req.FormValue(paramPartBytesOffset))
+	//totalPart,err :=  strconv.Atoi(req.FormValue(paramTotalParts))
+	//offset,err := strconv.Atoi(req.FormValue(paramPartBytesOffset))
 	index,err := strconv.Atoi(req.FormValue(paramPartIndex))
 
-	srv.writeGridFile(filename,req.FormValue(paramFileName),uuid,chunkSize,totalSize,totalPart,offset,index,datas)
+	//srv.writeGridFile(filename,req.FormValue(paramFileName),uuid,chunkSize,totalSize,totalPart,offset,index,datas)
+	srv.writeChunks(index,datas,uuid,chunkSize,totalSize,req.FormValue(paramFileName))
 
 	srv.writeUploadResponse(w, nil)
+}
+
+func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
+
+	type gfsFile struct {
+		Id          interface{} "_id"
+		ChunkSize   int         "chunkSize"
+		UploadDate  time.Time   "uploadDate"
+		Length      int64       ",minsize"
+		MD5         string
+		Filename    string    ",omitempty"
+		ContentType string    "contentType,omitempty"
+		Metadata    *bson.Raw ",omitempty"
+	}
+	var objFile gfsFile
+	err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
+	if err == nil {
+		return objFile.Id
+	}
+	finalId := bson.NewObjectId()
+
+	objFile = gfsFile {
+		Id:finalId,
+		UploadDate: bson.Now(),
+		Length: int64(totalFileSize),
+		ChunkSize: chunkSize,
+		Filename:fmt.Sprintf("%s#%s", uuid,filename),
+		MD5:uuid,
+	}
+
+	srv.gridFs.Files.Insert(objFile)
+
+	return finalId
+}
+
+func (srv*HttpServer)writeChunks(index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string)  {
+	type gfsChunk struct {
+		Id      interface{} "_id"
+		FilesId interface{} "files_id"
+		N       int
+		Data    []byte
+	}
+
+	// We may not own the memory of data, so rather than
+	// simply copying it, we'll marshal the document ahead of time.
+	fileid := srv.getFinalFileID(uuid,chunkSize,totalSize,filename)
+	data, err := bson.Marshal(gfsChunk{bson.NewObjectId(), fileid, index, datas})
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	srv.gridFs.Chunks.Insert(bson.Raw{Data: data})
 }
 
 func (srv *HttpServer) writeGridFile(filename string,
@@ -245,8 +328,6 @@ func (srv *HttpServer) writeGridFile(filename string,
 	defer gridFile.Close()
 }
 
-
-
 func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 	partIndex := req.FormValue(paramPartIndex)
 	if len(partIndex) == 0 {
@@ -264,27 +345,28 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 	}
 
 	uuid := req.FormValue(paramUuid)
-	filename := req.FormValue(paramFileName)
+		filename := req.FormValue(paramFileName)
+	/*
+			totalFileSize, err := strconv.Atoi(req.FormValue(paramTotalFileSize))
+			if err != nil {
+				srv.writeHttpResponse(w, http.StatusInternalServerError, err)
+				return
+			}
+			totalParts, err := strconv.Atoi(req.FormValue(paramTotalParts))
+			if err != nil {
+				srv.writeHttpResponse(w, http.StatusInternalServerError, err)
+				return
+			}
 
-	totalFileSize, err := strconv.Atoi(req.FormValue(paramTotalFileSize))
-	if err != nil {
-		srv.writeHttpResponse(w, http.StatusInternalServerError, err)
-		return
-	}
-	totalParts, err := strconv.Atoi(req.FormValue(paramTotalParts))
-	if err != nil {
-		srv.writeHttpResponse(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	finalFilename := fmt.Sprintf("%s/%s/%s", srv.dir, uuid, filename)
-	f, err := os.Create(finalFilename)
-	if err != nil {
-		srv.writeHttpResponse(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer f.Close()
-
+			finalFilename := fmt.Sprintf("%s/%s/%s", srv.dir, uuid, filename)
+			f, err := os.Create(finalFilename)
+			if err != nil {
+				srv.writeHttpResponse(w, http.StatusInternalServerError, err)
+				return
+			}
+			defer f.Close()
+			go srv.ChunksDone(finalFilename, uuid, totalParts, totalFileSize)
+		*/
 	type gfsFile struct {
 		Id          interface{} "_id"
 		ChunkSize   int         "chunkSize"
@@ -295,71 +377,11 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 		ContentType string    "contentType,omitempty"
 		Metadata    *bson.Raw ",omitempty"
 	}
-	var objFile []gfsFile
-	srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).All(&objFile)
+	var objFile gfsFile
+	srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
 	//count,err := gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).Count()
 
-	var ids map[bson.ObjectId]int
-	ids = make(map[bson.ObjectId]int)
-	var chunkSize int
-	for key, value := range objFile {
-		fmt.Println(key)
-		result := struct {
-			Index int
-			Uuid string
-			Filename string
-			ChunkSize int
-			TotalSize int
-			TotalPart int
-			Offset int
-		}{}
-		err = bson.Unmarshal(value.Metadata.Data, &result)
-		fmt.Println(result)
-		oid, ok := value.Id.(bson.ObjectId)
-		if !ok  {
-			fmt.Println(ok)
-		}
-		ids[oid] = result.Index
-
-		if chunkSize == 0 {
-			chunkSize = result.ChunkSize
-		}
-
-
-		err := srv.gridFs.Files.Remove(bson.M{"_id": value.Id})
-		if err != nil {
-			fmt.Println(err)
-		}
-
-
-	}
-	fmt.Println(ids)
-
-	finalId := bson.NewObjectId()
-	doneFile := &gfsFile {
-		Id:finalId,
-		UploadDate: bson.Now(),
-		Length: int64(totalFileSize),
-		ChunkSize: chunkSize,
-		Filename:filename,
-		MD5:uuid,
-	}
-
-	err = srv.gridFs.Files.Insert(doneFile)
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	for id, value := range ids {
-		err := srv.gridFs.Chunks.Update(bson.M{"files_id":id}, bson.M{"$set": bson.M{ "files_id": finalId,"n":value, }})
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
-
-	//gridFs.Chunks.UpdateAll()
-
-	go srv.ChunksDone(finalFilename, uuid, totalParts, totalFileSize)
+	srv.gridFs.Files.Update(bson.M{"_id":objFile.Id}, bson.M{"$set": bson.M{ "uploadDate":  bson.Now(), }})
 }
 
 func (srv *HttpServer)ChunksDone(finalFilename string, uuid string, totalParts int, totalFileSize int) {

@@ -17,3 +17,5 @@ fineuploader
 .idea/
 uploads/
 goclient/uploader.db
+goclient/1.bat
+dist/dist_gen.go

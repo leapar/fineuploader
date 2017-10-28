@@ -1,0 +1,178 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "description": "断点续传服务端接口",
+    "version": "1.0.0",
+    "title": "文件服务器接口文档",
+    "contact": {
+      "email": "leapar@163.com"
+    },
+    "license": {
+      "name": "Apache 2.0",
+      "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+    }
+  },
+  "basePath": "/",
+  "tags": [
+    {
+      "name": "上传",
+      "description": "上传文件"
+    }
+  ],
+  "schemes": [
+    "http"
+  ],
+  "paths": {
+    "/upload": {
+      "post": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "上传文件块",
+        "description": "",
+        "operationId": "addPet",
+        "consumes": [
+          "multipart/form-data"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "qqpartindex",
+            "in": "formData",
+            "description": "当前序号",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "qqpartbyteoffset",
+            "in": "formData",
+            "description": "当前偏移量",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "qqchunksize",
+            "in": "formData",
+            "description": "分块大小，文件切分单位",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "qqtotalfilesize",
+            "in": "formData",
+            "description": "文件总大小",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "qqtotalparts",
+            "in": "formData",
+            "description": "总文件块数",
+            "required": false,
+            "type": "integer"
+          },
+          {
+            "name": "qquuid",
+            "in": "formData",
+            "description": "文件唯一id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "qqfilename",
+            "in": "formData",
+            "description": "文件名",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "qqfile",
+            "in": "formData",
+            "description": "文件",
+            "required": true,
+            "type": "file"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation",
+            "schema": {
+              "$ref": "#/definitions/UploadResponse"
+            }
+          },
+          "400": {
+            "description": "参数有问题"
+          },
+          "405": {
+            "description": "方法不支持"
+          }
+        }
+      }
+    },
+    "/chunksdone": {
+      "post": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "文件上传完成",
+        "description": "",
+        "consumes": [
+          "multipart/form-data"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "qquuid",
+            "in": "formData",
+            "description": "文件唯一id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "qqfilename",
+            "in": "formData",
+            "description": "文件名",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "qqtotalfilesize",
+            "in": "formData",
+            "description": "文件总大小",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "qqtotalparts",
+            "in": "formData",
+            "description": "总文件块数",
+            "required": false,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation"
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "UploadResponse": {
+      "type": "object",
+      "properties": {
+        "success": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

@@ -5,7 +5,7 @@ import (
 	"os"
 	"syscall"
 	"os/signal"
-	"log"
+	//"log"
 	"github.com/boltdb/bolt"
 	Uploader "../uploader"
 )
@@ -49,13 +49,14 @@ func Upload()  cli.Command{
 			},
 
 			Action: func(c *cli.Context) error {
-				boltDB, err := bolt.Open("uploader.db", 0600, nil)
+				var boltDB *bolt.DB
+				/*boltDB, err := bolt.Open("uploader.db", 0600, nil)
 				if err != nil {
 					log.Fatal(err)
 					return nil
 				}
 
-				defer boltDB.Close()
+				defer boltDB.Close()*/
 
 				if filePath == ""  {
 					cli.ShowCommandHelp(c,"upload")
