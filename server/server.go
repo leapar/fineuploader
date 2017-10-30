@@ -14,6 +14,8 @@ import (
 	"github.com/rcrowley/go-metrics"
 	 //"github.com/vrischmann/go-metrics-influxdb"
 	_ "net/http/pprof"
+	"strings"
+	"math"
 )
 
 type UploadResponse struct {
@@ -31,6 +33,13 @@ type gfsFile struct {
 	Filename    string    ",omitempty"
 	ContentType string    "contentType,omitempty"
 	Metadata    *bson.Raw ",omitempty"
+}
+
+type gfsChunk struct {
+	Id      interface{} "_id"
+	FilesId interface{} "files_id"
+	N       int
+	Data    []byte
 }
 
 // Chunked request parameters
@@ -136,6 +145,7 @@ func (srv *HttpServer) Start() {
 	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
+	http.HandleFunc("/files",srv.DownloadHandler)
 	http.HandleFunc("/metrics",srv.Metrics)
 	hostPort := fmt.Sprintf("%s:%d",srv.host, srv.port)
 	log.Printf("Initiating server listening at [%s]", hostPort)
@@ -149,6 +159,135 @@ func (srv *HttpServer) Start() {
 	log.Fatal(http.ListenAndServe(hostPort, nil))
 
 
+}
+
+func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		errorMsg := fmt.Sprintf("Method [%s] is not supported:", req.Method)
+		http.Error(w, errorMsg, http.StatusMethodNotAllowed)
+
+		return
+	}
+	srv.EnsureConnected()
+	fileId := req.FormValue("id")
+	var objFile gfsFile
+	err := srv.gridFs.Files.Find(bson.M{ "md5":fileId }).One(&objFile)
+	if err != nil {
+		//http.Error(w, "no file", http.StatusNotFound)
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+
+
+	strRange := req.Header.Get("Range")
+	if strRange != "" {
+		strRange = strRange[6:]
+		//debugLog.Println(strRange)
+		posArr := strings.Split(strRange, "-")
+		startPos := 0
+		endPos := 0
+
+		maxReadSize := objFile.ChunkSize
+		if len(posArr) == 1 {
+			startPos, _ = strconv.Atoi(posArr[0])
+
+		} else if len(posArr) == 2 {
+			startPos, _ = strconv.Atoi(posArr[0])
+			endPos, _ = strconv.Atoi(posArr[1])
+		}
+		//debugLog.Println(len(posArr), startPos, endPos)
+		if endPos == 0 {
+			endPos = startPos + maxReadSize
+			if endPos > int(objFile.Length) {
+				endPos = int(objFile.Length)
+			}
+		} else {
+			endPos = endPos + 1
+		}
+
+		size := endPos - startPos
+		if size <= 0 {
+			w.Header().Add("Accept-Ranges", "bytes")
+			w.Header().Add("Content-Length", strconv.Itoa(size))
+			w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+
+		var chunks []gfsChunk
+		err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		//开始计算长度
+
+		partSize := int(math.Floor(float64(float64(startPos) / float64(objFile.ChunkSize))))
+	//	fmt.Println(strRange,partSize)
+
+
+		buffer := make([]byte,size)
+
+//		fmt.Println(len(chunks))
+		var write int = 0
+
+		i := partSize
+		for ; write < size;  {
+			var index int = 0
+			var count int = 0
+
+			if i == partSize{
+				index = startPos - i*objFile.ChunkSize
+			}
+
+			if len(chunks[i].Data) - index  <= size - write {
+				count = len(chunks[i].Data) - index
+			} else {
+				count = size - write
+			}
+
+			copy(buffer[write:],chunks[i].Data[index:index+count])
+			write += count
+		//	io.CopyN(buf,chunks[i].Data,100)
+			i++;
+
+		}
+		w.Header().Add("Accept-Ranges", "bytes")
+		w.Header().Add("Content-Length", strconv.Itoa(size))
+		w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(buffer)
+
+		//w.Header().Add("Content-Type", contentType)
+
+		//w.Header().Add("Accept-Ranges", "bytes")
+	//	w.Header().Add("Content-Length", strconv.Itoa(int(objFile.Length)))
+	//	w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(fileSize)))
+
+	//	w.Header().Add("")
+	//	w.WriteHeader(http.StatusOK)
+	//	w.Write([]byte("ss"))
+		return
+	}
+	var chunks []gfsChunk
+	err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	w.Header().Add("Accept-Ranges", "bytes")
+	w.Header().Add("Content-Length", strconv.Itoa(int(objFile.Length)))
+
+	w.WriteHeader(http.StatusOK)
+	for _, chunk := range chunks {
+		w.Write(chunk.Data)
+	}
+
+	return
+	//srv.EnsureConnected()
+	//srv.gridFs.Files.Find()
 }
 
 func (srv *HttpServer) Metrics(w http.ResponseWriter, req *http.Request) {
@@ -273,12 +412,7 @@ func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int
 }
 
 func (srv*HttpServer)writeChunks(index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string)  {
-	type gfsChunk struct {
-		Id      interface{} "_id"
-		FilesId interface{} "files_id"
-		N       int
-		Data    []byte
-	}
+
 
 	// We may not own the memory of data, so rather than
 	// simply copying it, we'll marshal the document ahead of time.
