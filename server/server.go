@@ -13,7 +13,7 @@ import (
 	"gopkg.in/mgo.v2"
 	"github.com/rcrowley/go-metrics"
 	 //"github.com/vrischmann/go-metrics-influxdb"
-
+	_ "net/http/pprof"
 )
 
 type UploadResponse struct {
@@ -103,6 +103,7 @@ func (srv *HttpServer) EnsureConnected(){
 	//Ping panics if session is closed. (see mgo.Session.Panic())
 	err := srv.session.Ping()
 	if err != nil {
+		srv.session.Close()
 		log.Println("ping:",err)
 		DBErrCount.Inc(1)
 		panic(err)
@@ -127,9 +128,6 @@ func (srv *HttpServer) Start() {
 	http.HandleFunc("/upload",srv.UploadHandler)
 	http.HandleFunc("/chunksdone", srv.ChunksDoneHandler)
 	http.Handle("/upload/", http.StripPrefix("/upload/", http.HandlerFunc(srv.UploadHandler)))
-	http.HandleFunc("/static/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, r.URL.Path[1:])
-	})
 	http.HandleFunc("/res/", func(w http.ResponseWriter, r *http.Request) {
 		http.StripPrefix("/res/", Assets(AssetsOpts{
 			Develop:false,
@@ -202,6 +200,7 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 		reqUploadParamErrCount.Inc(1)
 		return
 	}
+	defer file.Close()
 
 	datas,err := ioutil.ReadAll(file)
 
@@ -233,6 +232,7 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 		reqUploadParamErrCount.Inc(1)
 		return
 	}
+	defer file.Close()
 	datas,err := ioutil.ReadAll(file)
 
 	chunkSize,err := strconv.Atoi(req.FormValue(paramChunkSize))
@@ -289,9 +289,12 @@ func (srv*HttpServer)writeChunks(index int,datas []byte,uuid string,chunkSize in
 		panic(err)
 		return
 	}
-
+	srv.gridFs.Chunks.Remove(bson.M{"files_id":fileid,"n":index})
 	err = srv.gridFs.Chunks.Insert(bson.Raw{Data: data})
+
 	if err != nil{
+
+		log.Println(err)
 		DBErrCount.Inc(1)
 		panic(err)
 	}
@@ -315,7 +318,7 @@ func (srv *HttpServer) writeGridFile(filename string,
 		panic(err)
 		return
 	}
-
+	defer gridFile.Close()
 	gridFile.SetChunkSize(chunkSize)
 
 	gridFile.SetMeta(&struct{
@@ -340,11 +343,12 @@ func (srv *HttpServer) writeGridFile(filename string,
 		panic(err)
 	}
 
-	defer gridFile.Close()
+
 }
 
 func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 	defer func() {
+
 		if r := recover(); r != nil {
 			fmt.Println("panic upload error")
 			reqUploadErrCount.Inc(1)
@@ -365,6 +369,7 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
 
 	defer func() {
+
 		if r := recover(); r != nil {
 			fmt.Println("panic upload done error")
 			reqUploadDoneErrCount.Inc(1)
