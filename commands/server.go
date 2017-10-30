@@ -15,14 +15,14 @@ func Server()  cli.Command {
 		Usage:   "start a http server",
 		Flags:[]cli.Flag{
 			altsrc.NewStringFlag(cli.StringFlag{
-				Name:        "host",
+				Name:        "server.host",
 				Value:       "0.0.0.0",
 				Usage:       "the host",
 				Destination: &host,
 			}),
 
 			altsrc.NewIntFlag(cli.IntFlag{
-				Name:        "port",
+				Name:        "server.port",
 				Value:       8080,
 				Usage:       "bind port",
 				Destination: &port,
@@ -30,7 +30,7 @@ func Server()  cli.Command {
 
 			altsrc.NewStringFlag(
 				cli.StringFlag{
-					Name:        "directory",
+					Name:        "server.directory",
 					Value:       "uploads",
 					Usage:       "the  Path of upload files",
 					Destination: &dir,
@@ -38,7 +38,7 @@ func Server()  cli.Command {
 			),
 
 			altsrc.NewStringFlag(cli.StringFlag{
-				Name:        "mongo",
+				Name:        "server.mongo",
 				Value:       "127.0.0.1:27017",
 				Usage:       "the mongodb url",
 				Destination: &mongo,

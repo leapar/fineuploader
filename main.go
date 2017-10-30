@@ -22,7 +22,7 @@ func main() {
 	flags := []cli.Flag{
 		cli.StringFlag{
 			Name: "config",
-			Value: "config.yml",
+			Value: "config.toml",
 			Usage: "Configuration file",
 		},
 	}
@@ -60,7 +60,9 @@ func newConfigLoader(name string, flags []cli.Flag) cli.BeforeFunc {
 			return fmt.Errorf("Configuration file %s not found", value)
 		}
 
-		createInputSource := altsrc.NewYamlSourceFromFlagFunc(name)
+		//createInputSource := altsrc.NewYamlSourceFromFlagFunc(name)
+
+		createInputSource := altsrc.NewTomlSourceFromFlagFunc(name)
 		inputSource, err := createInputSource(c)
 
 		if err != nil {

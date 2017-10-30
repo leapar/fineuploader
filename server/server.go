@@ -6,14 +6,14 @@ import (
 	"log"
 	"os"
 	"io/ioutil"
-	//"bytes"
-	"io"
 	"strconv"
 	"time"
 	"gopkg.in/mgo.v2/bson"
 	"encoding/json"
 	"gopkg.in/mgo.v2"
 	"github.com/rcrowley/go-metrics"
+	 //"github.com/vrischmann/go-metrics-influxdb"
+
 )
 
 type UploadResponse struct {
@@ -22,7 +22,16 @@ type UploadResponse struct {
 	PreventRetry bool   `json:"preventRetry"`
 }
 
-
+type gfsFile struct {
+	Id          interface{} "_id"
+	ChunkSize   int         "chunkSize"
+	UploadDate  time.Time   "uploadDate"
+	Length      int64       ",minsize"
+	MD5         string
+	Filename    string    ",omitempty"
+	ContentType string    "contentType,omitempty"
+	Metadata    *bson.Raw ",omitempty"
+}
 
 // Chunked request parameters
 const (
@@ -38,7 +47,17 @@ const (
 )
 
 var (
-	errorCount = metrics.NewRegisteredCounter("log.error", metrics.DefaultRegistry)
+	reqUploadCount = metrics.NewRegisteredCounter("upload.request", metrics.DefaultRegistry)
+	reqUploadOkCount = metrics.NewRegisteredCounter("upload.request.ok", metrics.DefaultRegistry)
+	reqUploadErrCount = metrics.NewRegisteredCounter("upload.request.error", metrics.DefaultRegistry)
+	reqUploadParamErrCount = metrics.NewRegisteredCounter("upload.request.params.error", metrics.DefaultRegistry)
+
+	reqUploadDoneCount = metrics.NewRegisteredCounter("uploaddone.request", metrics.DefaultRegistry)
+	reqUploadDoneOkCount = metrics.NewRegisteredCounter("uploaddone.request.ok", metrics.DefaultRegistry)
+	reqUploadDoneErrCount = metrics.NewRegisteredCounter("uploaddone.request.error", metrics.DefaultRegistry)
+	reqUploadDoneParamErrCount = metrics.NewRegisteredCounter("uploaddone.request.params.error", metrics.DefaultRegistry)
+
+	DBErrCount = metrics.NewRegisteredCounter("db.error", metrics.DefaultRegistry)
 
 
 )
@@ -61,15 +80,46 @@ func New(port int,host string,mongo string,dir string) *HttpServer {
 	}
 }
 
+
+func (srv *HttpServer) EnsureConnected(){
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println("ReConnect....")
+			//Your reconnect logic here.
+			session, err := mgo.Dial(srv.mongo)
+			if err != nil {
+				log.Println("[grid]mgo.Dial ", err)
+				panic(err)
+				return
+			}
+			srv.session = session
+
+			database := session.DB("test")
+			srv.gridFs = database.GridFS("uploader")
+			log.Println("ReConnect ok")
+		}
+	}()
+
+	//Ping panics if session is closed. (see mgo.Session.Panic())
+	err := srv.session.Ping()
+	if err != nil {
+		log.Println("ping:",err)
+		DBErrCount.Inc(1)
+		panic(err)
+	}
+}
+
+
 func (srv *HttpServer) Start() {
 	session, err := mgo.Dial(srv.mongo)
+
 	log.Println("dial mongodb:",srv.mongo)
 	if err != nil {
 		log.Println("[grid]mgo.Dial ", err)
 		return
 	}
 	srv.session = session
-	defer session.Close()
+	defer srv.session.Close()
 
 	database := session.DB("test")
 	srv.gridFs = database.GridFS("uploader")
@@ -81,21 +131,34 @@ func (srv *HttpServer) Start() {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
 	http.HandleFunc("/res/", func(w http.ResponseWriter, r *http.Request) {
-		//dir := http.Dir("swagger-ui")
-		//fileServer := http.FileServer(dir)
-	//	http.StripPrefix("/doc/", fileServer).ServeHTTP(w, r)
 		http.StripPrefix("/res/", Assets(AssetsOpts{
 			Develop:false,
 		})).ServeHTTP(w, r)
-		//http.ServeFile(w, r, r.URL.Path[1:])
 	})
 	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
+	http.HandleFunc("/metrics",srv.Metrics)
 	hostPort := fmt.Sprintf("%s:%d",srv.host, srv.port)
 	log.Printf("Initiating server listening at [%s]", hostPort)
 	log.Printf("Base upload directory set to [%s]", srv.dir)
+
+	metrics.RegisterRuntimeMemStats(metrics.DefaultRegistry)
+	go metrics.CaptureRuntimeMemStats(metrics.DefaultRegistry, 5*time.Second)
+
+	//influxdb.InfluxDB(metrics.DefaultRegistry, 10e9, "127.0.0.1:8086","metrics", "test", "test" )
+
 	log.Fatal(http.ListenAndServe(hostPort, nil))
+
+
+}
+
+func (srv *HttpServer) Metrics(w http.ResponseWriter, req *http.Request) {
+	w.Header().Add("content-type", "application/json")
+	b, _ := metrics.DefaultRegistry.(*metrics.StandardRegistry).MarshalJSON()
+
+	w.Write(b)
+//	metrics.WriteJSONOnce(metrics.DefaultRegistry,w)
 }
 
 func (srv *HttpServer) UploadHandler(w http.ResponseWriter, req *http.Request) {
@@ -128,6 +191,7 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 	if len(uuid) == 0 {
 		log.Printf("No uuid received, invalid upload request")
 		http.Error(w, "No uuid received", http.StatusBadRequest)
+		reqUploadParamErrCount.Inc(1)
 		return
 	}
 
@@ -135,39 +199,11 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Println(err)
 		srv.writeUploadResponse(w, err)
+		reqUploadParamErrCount.Inc(1)
 		return
 	}
 
 	datas,err := ioutil.ReadAll(file)
-/*
-	fileDir := fmt.Sprintf("%s/%s", srv.dir, uuid)
-	if err := os.MkdirAll(fileDir, 0777); err != nil {
-		srv.writeUploadResponse(w, err)
-		return
-	}
-
-	var filename string
-	filename = fmt.Sprintf("%s/%s", fileDir, headers.Filename)
-
-	outfile, err := os.Create(filename)
-	if err != nil {
-		srv.writeUploadResponse(w, err)
-		return
-	}
-	defer outfile.Close()
-
-
-	buf := bytes.NewBuffer(datas)
-
-	///_, err = io.Copy(outfile, file)
-	_, err = io.Copy(outfile, buf)
-	if err != nil {
-		srv.writeUploadResponse(w, err)
-		return
-	}
-
-
-*/
 
 	filename := fmt.Sprintf("%s",  headers.Filename)
 	totalSize := len(datas)
@@ -176,9 +212,9 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request) {
 	index := 0
 
 	srv.writeGridFile(filename,req.FormValue(paramFileName),uuid,totalSize,totalSize,totalPart,offset,index,datas)
-	//srv.writeChunks(index,datas,uuid,totalSize,totalSize)
-
 	srv.writeUploadResponse(w, nil)
+
+	reqUploadOkCount.Inc(1)
 }
 
 func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
@@ -186,6 +222,7 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 	if len(uuid) == 0 {
 		log.Printf("No uuid received, invalid upload request")
 		http.Error(w, "No uuid received", http.StatusBadRequest)
+		reqUploadParamErrCount.Inc(1)
 		return
 	}
 
@@ -193,62 +230,23 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Println(err)
 		srv.writeUploadResponse(w, err)
+		reqUploadParamErrCount.Inc(1)
 		return
 	}
 	datas,err := ioutil.ReadAll(file)
-	/*	fileDir := fmt.Sprintf("%s/%s", srv.dir, uuid)
-	if err := os.MkdirAll(fileDir, 0777); err != nil {
-		srv.writeUploadResponse(w, err)
-		return
-	}
 
-
-
-	partIndex := req.FormValue(paramPartIndex)
-	var filename string
-	filename = fmt.Sprintf("%s/%s_%05s", fileDir, uuid, partIndex)
-	outfile, err := os.Create(filename)
-	if err != nil {
-		srv.writeUploadResponse(w, err)
-		return
-	}
-	defer outfile.Close()
-
-
-	buf := bytes.NewBuffer(datas)
-
-	///_, err = io.Copy(outfile, file)
-	_, err = io.Copy(outfile, buf)
-	if err != nil {
-		srv.writeUploadResponse(w, err)
-		return
-	}*/
-
-	//filename := fmt.Sprintf("%s_%05s.part", uuid, partIndex)
 	chunkSize,err := strconv.Atoi(req.FormValue(paramChunkSize))
 	totalSize,err := strconv.Atoi(req.FormValue(paramTotalFileSize))
-	//totalPart,err :=  strconv.Atoi(req.FormValue(paramTotalParts))
-	//offset,err := strconv.Atoi(req.FormValue(paramPartBytesOffset))
 	index,err := strconv.Atoi(req.FormValue(paramPartIndex))
-
-	//srv.writeGridFile(filename,req.FormValue(paramFileName),uuid,chunkSize,totalSize,totalPart,offset,index,datas)
 	srv.writeChunks(index,datas,uuid,chunkSize,totalSize,req.FormValue(paramFileName))
 
 	srv.writeUploadResponse(w, nil)
+	reqUploadOkCount.Inc(1)
 }
 
 func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
+	srv.EnsureConnected()
 
-	type gfsFile struct {
-		Id          interface{} "_id"
-		ChunkSize   int         "chunkSize"
-		UploadDate  time.Time   "uploadDate"
-		Length      int64       ",minsize"
-		MD5         string
-		Filename    string    ",omitempty"
-		ContentType string    "contentType,omitempty"
-		Metadata    *bson.Raw ",omitempty"
-	}
 	var objFile gfsFile
 	err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
 	if err == nil {
@@ -264,8 +262,12 @@ func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int
 		Filename:fmt.Sprintf("%s#%s", uuid,filename),
 		MD5:uuid,
 	}
-
-	srv.gridFs.Files.Insert(objFile)
+	err = srv.gridFs.Files.Insert(objFile)
+	if err != nil {
+		DBErrCount.Inc(1)
+		log.Println("Files.Insert",err)
+		panic(err)
+	}
 
 	return finalId
 }
@@ -284,10 +286,15 @@ func (srv*HttpServer)writeChunks(index int,datas []byte,uuid string,chunkSize in
 	data, err := bson.Marshal(gfsChunk{bson.NewObjectId(), fileid, index, datas})
 	if err != nil {
 		log.Println(err)
+		panic(err)
 		return
 	}
 
-	srv.gridFs.Chunks.Insert(bson.Raw{Data: data})
+	err = srv.gridFs.Chunks.Insert(bson.Raw{Data: data})
+	if err != nil{
+		DBErrCount.Inc(1)
+		panic(err)
+	}
 }
 
 func (srv *HttpServer) writeGridFile(filename string,
@@ -299,9 +306,13 @@ func (srv *HttpServer) writeGridFile(filename string,
 	offset int,
 	index int,
 	datas []byte)  {
+
+	srv.EnsureConnected()
 	gridFile, err := srv.gridFs.Create(filename)
 	if err != nil {
+		DBErrCount.Inc(1)
 		log.Println(err)
+		panic(err)
 		return
 	}
 
@@ -323,12 +334,25 @@ func (srv *HttpServer) writeGridFile(filename string,
 		Offset:offset,
 		Index:index,
 	})
-	gridFile.Write(datas)
+	_,err = gridFile.Write(datas)
+	if err != nil{
+		DBErrCount.Inc(1)
+		panic(err)
+	}
 
 	defer gridFile.Close()
 }
 
 func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("panic upload error")
+			reqUploadErrCount.Inc(1)
+		}
+	}()
+
+	reqUploadCount.Inc(1)
+	//atomic.AddInt64(&reqUploadCount,1)
 	partIndex := req.FormValue(paramPartIndex)
 	if len(partIndex) == 0 {
 		srv.singleFile(w,req)
@@ -339,95 +363,45 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 }
 
 func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("panic upload done error")
+			reqUploadDoneErrCount.Inc(1)
+		}
+	}()
+
+
 	if req.Method != http.MethodPost {
 		errorMsg := fmt.Sprintf("Method [%s] is not supported", req.Method)
 		http.Error(w, errorMsg, http.StatusMethodNotAllowed)
 	}
-
+	reqUploadDoneCount.Inc(1)
 	uuid := req.FormValue(paramUuid)
-		filename := req.FormValue(paramFileName)
-	/*
-			totalFileSize, err := strconv.Atoi(req.FormValue(paramTotalFileSize))
-			if err != nil {
-				srv.writeHttpResponse(w, http.StatusInternalServerError, err)
-				return
-			}
-			totalParts, err := strconv.Atoi(req.FormValue(paramTotalParts))
-			if err != nil {
-				srv.writeHttpResponse(w, http.StatusInternalServerError, err)
-				return
-			}
+	filename := req.FormValue(paramFileName)
 
-			finalFilename := fmt.Sprintf("%s/%s/%s", srv.dir, uuid, filename)
-			f, err := os.Create(finalFilename)
-			if err != nil {
-				srv.writeHttpResponse(w, http.StatusInternalServerError, err)
-				return
-			}
-			defer f.Close()
-			go srv.ChunksDone(finalFilename, uuid, totalParts, totalFileSize)
-		*/
-	type gfsFile struct {
-		Id          interface{} "_id"
-		ChunkSize   int         "chunkSize"
-		UploadDate  time.Time   "uploadDate"
-		Length      int64       ",minsize"
-		MD5         string
-		Filename    string    ",omitempty"
-		ContentType string    "contentType,omitempty"
-		Metadata    *bson.Raw ",omitempty"
-	}
-	var objFile gfsFile
-	srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
-	//count,err := gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).Count()
-
-	srv.gridFs.Files.Update(bson.M{"_id":objFile.Id}, bson.M{"$set": bson.M{ "uploadDate":  bson.Now(), }})
-}
-
-func (srv *HttpServer)ChunksDone(finalFilename string, uuid string, totalParts int, totalFileSize int) {
-	f, err := os.Create(finalFilename)
-	if err != nil {
-		log.Println(err)
+	if uuid == ""  || filename == ""{
+		reqUploadDoneParamErrCount.Inc(1)
 		return
 	}
-	defer f.Close()
 
-	var totalWritten int64
-	for i := 0; i < totalParts; i++ {
-		part := fmt.Sprintf("%[1]s/%[2]s/%[2]s_%05[3]d", srv.dir, uuid, i)
-		partFile, err := os.Open(part)
-		if err != nil {
-			log.Println(err)
-			//writeHttpResponse(w, http.StatusInternalServerError, err)
-			return
-		}
-		written, err := io.Copy(f, partFile)
-		if err != nil {
-			log.Println(err)
-			//writeHttpResponse(w, http.StatusInternalServerError, err)
-			return
-		}
-		partFile.Close()
-		totalWritten += written
 
-		if err := os.Remove(part); err != nil {
-			log.Printf("Error: %v", err)
-		}
-	}
-
-	if totalWritten != int64(totalFileSize) {
-		errorMsg := fmt.Sprintf("Total file size mistmatch, expected %d bytes but actual is %d", totalFileSize, totalWritten)
-		//http.Error(w, errorMsg, http.StatusMethodNotAllowed)
-		log.Println(errorMsg)
-	}
-}
-
-func (srv *HttpServer)writeHttpResponse(w http.ResponseWriter, httpCode int, err error) {
-	w.WriteHeader(httpCode)
+	var objFile gfsFile
+	srv.EnsureConnected()
+	err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
+	//count,err := gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).Count()
 	if err != nil {
-		log.Printf("An error happened: %v", err)
-		w.Write([]byte(err.Error()))
+		DBErrCount.Inc(1)
+		reqUploadDoneErrCount.Inc(1)
 	}
+
+	err = srv.gridFs.Files.Update(bson.M{"_id":objFile.Id}, bson.M{"$set": bson.M{ "uploadDate":  bson.Now(), }})
+	if err != nil {
+		DBErrCount.Inc(1)
+		reqUploadDoneErrCount.Inc(1)
+	}
+	reqUploadDoneOkCount.Inc(1)
+
 }
 
 func (srv *HttpServer)writeUploadResponse(w http.ResponseWriter, err error) {

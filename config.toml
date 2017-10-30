@@ -1,0 +1,11 @@
+[server]
+    directory = "uploads"
+    host = "127.0.0.1"
+    port = 8080
+    mongo = "127.0.0.1:27017"
+
+#[influxdb]
+#    password = ""
+#    host = "127.0.0.1:8086"
+#    username = ""
+#    database = "db"
