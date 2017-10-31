@@ -17,6 +17,7 @@ import (
 	"strings"
 	"math"
 	"sync"
+	_ "github.com/NYTimes/gziphandler"
 )
 
 type UploadResponse struct {
@@ -148,6 +149,7 @@ func (srv *HttpServer) Start() {
 	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
+	//http.Handle("/files",gziphandler.GzipHandler( http.HandlerFunc(srv.DownloadHandler)))
 	http.HandleFunc("/files",srv.DownloadHandler)
 	http.HandleFunc("/metrics",srv.Metrics)
 	hostPort := fmt.Sprintf("%s:%d",srv.host, srv.port)
@@ -227,13 +229,11 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 		//开始计算长度
 
 		partSize := int(math.Floor(float64(float64(startPos) / float64(objFile.ChunkSize))))
-	//	fmt.Println(strRange,partSize)
 
-
-		buffer := make([]byte,size)
-
-//		fmt.Println(len(chunks))
 		var write int = 0
+
+		w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
+		w.WriteHeader(http.StatusPartialContent)
 
 		i := partSize
 		for ; write < size;  {
@@ -260,17 +260,15 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 				count = size - write
 			}
 
-			copy(buffer[write:],chunk.Data[index:index+count])
+			w.Write(chunk.Data[index:index+count])
 			write += count
-		//	io.CopyN(buf,chunks[i].Data,100)
 			i++;
 
 		}
 		srv.writeDownloadHeader(w,objFile.Filename,size)
 
-		w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
-		w.WriteHeader(http.StatusPartialContent)
-		w.Write(buffer)
+
+
 
 		return
 	}
