@@ -17,7 +17,7 @@ import (
 	"strings"
 	"math"
 	"sync"
-	_ "github.com/NYTimes/gziphandler"
+	"github.com/NYTimes/gziphandler"
 )
 
 type UploadResponse struct {
@@ -149,8 +149,8 @@ func (srv *HttpServer) Start() {
 	http.HandleFunc("/uploads/", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, r.URL.Path[1:])
 	})
-	//http.Handle("/files",gziphandler.GzipHandler( http.HandlerFunc(srv.DownloadHandler)))
-	http.HandleFunc("/files",srv.DownloadHandler)
+	http.Handle("/files",gziphandler.GzipHandler( http.HandlerFunc(srv.DownloadHandler)))
+	//http.HandleFunc("/files",srv.DownloadHandler)
 	http.HandleFunc("/metrics",srv.Metrics)
 	hostPort := fmt.Sprintf("%s:%d",srv.host, srv.port)
 	log.Printf("Initiating server listening at [%s]", hostPort)
