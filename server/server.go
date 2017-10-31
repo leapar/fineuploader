@@ -224,14 +224,6 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 			return
 		}
 
-
-		var chunks []gfsChunk
-		err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
 		//开始计算长度
 
 		partSize := int(math.Floor(float64(float64(startPos) / float64(objFile.ChunkSize))))
@@ -252,18 +244,23 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 				index = startPos - i*objFile.ChunkSize
 			}
 
-			if i >= len(chunks) {
+			var chunk gfsChunk
+			err = srv.gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
+			//err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
+			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
-			if len(chunks[i].Data) - index  <= size - write {
-				count = len(chunks[i].Data) - index
+
+
+			if len(chunk.Data) - index  <= size - write {
+				count = len(chunk.Data) - index
 			} else {
 				count = size - write
 			}
 
-			copy(buffer[write:],chunks[i].Data[index:index+count])
+			copy(buffer[write:],chunk.Data[index:index+count])
 			write += count
 		//	io.CopyN(buf,chunks[i].Data,100)
 			i++;
@@ -277,18 +274,32 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 
 		return
 	}
-	var chunks []gfsChunk
-	err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
+	var chunk gfsChunk
 	srv.writeDownloadHeader(w,objFile.Filename,int(objFile.Length))
 
 	w.WriteHeader(http.StatusOK)
-	for _, chunk := range chunks {
+	for i := 0; i < int(math.Ceil(float64(objFile.Length) / float64(objFile.ChunkSize)));i++  {
+		err = srv.gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
+		if err != nil {
+			fmt.Println(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.Write(chunk.Data)
 	}
+
+	/*
+	//内存会有问题
+	err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
+	if err != nil {
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	for _, chunk := range chunks {
+		w.Write(chunk.Data)
+	}*/
 
 	return
 }
