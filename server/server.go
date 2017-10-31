@@ -16,6 +16,7 @@ import (
 	_ "net/http/pprof"
 	"strings"
 	"math"
+	"sync"
 )
 
 type UploadResponse struct {
@@ -78,6 +79,8 @@ type HttpServer struct {
 	mongo string
 	session *mgo.Session
 	gridFs *mgo.GridFS
+
+	lock sync.Mutex//并发上传时候 查询文件是否存在 不存在就创建一个file对象 这时候需要互斥
 }
 
 func New(port int,host string,mongo string,dir string) *HttpServer {
@@ -161,6 +164,13 @@ func (srv *HttpServer) Start() {
 
 }
 
+
+func (srv *HttpServer)writeDownloadHeader(w http.ResponseWriter,filename string,size int) {
+	w.Header().Add("Accept-Ranges", "bytes")
+	w.Header().Add("Content-Length", strconv.Itoa(size))
+	w.Header().Add("Content-Disposition", "attachment;filename="+filename)
+}
+
 func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request) {
 	if req.Method != http.MethodGet {
 		errorMsg := fmt.Sprintf("Method [%s] is not supported:", req.Method)
@@ -207,9 +217,8 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 
 		size := endPos - startPos
 		if size <= 0 {
-			w.Header().Add("Accept-Ranges", "bytes")
-			w.Header().Add("Content-Length", strconv.Itoa(size))
-			w.Header().Add("Content-Disposition", "attachment;filename="+objFile.Filename)
+			srv.writeDownloadHeader(w,objFile.Filename,size)
+
 			w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
 			w.WriteHeader(http.StatusOK)
 			return
@@ -243,6 +252,11 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 				index = startPos - i*objFile.ChunkSize
 			}
 
+			if i >= len(chunks) {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
 			if len(chunks[i].Data) - index  <= size - write {
 				count = len(chunks[i].Data) - index
 			} else {
@@ -255,23 +269,12 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 			i++;
 
 		}
-		w.Header().Add("Accept-Ranges", "bytes")
-		w.Header().Add("Content-Disposition", "attachment;filename="+objFile.Filename)
+		srv.writeDownloadHeader(w,objFile.Filename,size)
 
-		w.Header().Add("Content-Length", strconv.Itoa(size))
 		w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
 		w.WriteHeader(http.StatusPartialContent)
 		w.Write(buffer)
 
-		//w.Header().Add("Content-Type", contentType)
-
-		//w.Header().Add("Accept-Ranges", "bytes")
-	//	w.Header().Add("Content-Length", strconv.Itoa(int(objFile.Length)))
-	//	w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(fileSize)))
-
-	//	w.Header().Add("")
-	//	w.WriteHeader(http.StatusOK)
-	//	w.Write([]byte("ss"))
 		return
 	}
 	var chunks []gfsChunk
@@ -280,9 +283,7 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	w.Header().Add("Content-Disposition", "attachment;filename="+objFile.Filename)
-	w.Header().Add("Accept-Ranges", "bytes")
-	w.Header().Add("Content-Length", strconv.Itoa(int(objFile.Length)))
+	srv.writeDownloadHeader(w,objFile.Filename,int(objFile.Length))
 
 	w.WriteHeader(http.StatusOK)
 	for _, chunk := range chunks {
@@ -290,8 +291,6 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 	}
 
 	return
-	//srv.EnsureConnected()
-	//srv.gridFs.Files.Find()
 }
 
 func (srv *HttpServer) Metrics(w http.ResponseWriter, req *http.Request) {
@@ -389,9 +388,12 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 
 func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
 	srv.EnsureConnected()
+	srv.lock.Lock()
+	defer srv.lock.Unlock()
 
 	var objFile gfsFile
-	err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
+	//err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
+	err := srv.gridFs.Files.Find(bson.M{ "md5": uuid}).One(&objFile)
 	if err == nil {
 		return objFile.Id
 	}
@@ -402,7 +404,7 @@ func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int
 		UploadDate: bson.Now(),
 		Length: int64(totalFileSize),
 		ChunkSize: chunkSize,
-		Filename:fmt.Sprintf("%s#%s", uuid,filename),
+		Filename:fmt.Sprintf("%s", filename),
 		MD5:uuid,
 	}
 	err = srv.gridFs.Files.Insert(objFile)
@@ -531,8 +533,9 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 
 	var objFile gfsFile
 	srv.EnsureConnected()
-	err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
+	//err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
 	//count,err := gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).Count()
+	err := srv.gridFs.Files.Find(bson.M{ "md5": uuid}).One(&objFile)
 	if err != nil {
 		DBErrCount.Inc(1)
 		reqUploadDoneErrCount.Inc(1)

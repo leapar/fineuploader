@@ -160,6 +160,32 @@
           }
         }
       }
+    },
+    "/files": {
+      "get": {
+        "tags": [
+          "下载"
+        ],
+        "summary": "文件下载接口",
+        "description": "",
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "description": "文件唯一id",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation"
+          }
+        }
+      }
     }
   },
   "definitions": {
