@@ -209,6 +209,7 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 		if size <= 0 {
 			w.Header().Add("Accept-Ranges", "bytes")
 			w.Header().Add("Content-Length", strconv.Itoa(size))
+			w.Header().Add("Content-Disposition", "attachment;filename="+objFile.Filename)
 			w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
 			w.WriteHeader(http.StatusOK)
 			return
@@ -255,6 +256,8 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 
 		}
 		w.Header().Add("Accept-Ranges", "bytes")
+		w.Header().Add("Content-Disposition", "attachment;filename="+objFile.Filename)
+
 		w.Header().Add("Content-Length", strconv.Itoa(size))
 		w.Header().Add("Content-Range", "bytes "+strconv.Itoa(startPos)+"-"+strconv.Itoa(endPos-1)+"/"+strconv.Itoa(int(objFile.Length)))
 		w.WriteHeader(http.StatusPartialContent)
@@ -277,6 +280,7 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	w.Header().Add("Content-Disposition", "attachment;filename="+objFile.Filename)
 	w.Header().Add("Accept-Ranges", "bytes")
 	w.Header().Add("Content-Length", strconv.Itoa(int(objFile.Length)))
 
