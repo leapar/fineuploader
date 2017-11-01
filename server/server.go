@@ -618,13 +618,14 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 	//atomic.AddInt64(&reqUploadCount,1)
 	req.ParseMultipartForm(64)
 	partIndex := req.FormValue(paramPartIndex)
-
 	end2 := time.Now().UnixNano()
 	uploadICPTime.Update(float64(end2-start2) / float64(1e9))
+
 	if len(partIndex) == 0 {
 		srv.singleFile(w,req)
 		return
 	}
+	
 	srv.multiFile(w,req)
 	return
 }
@@ -678,8 +679,20 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 	if err != nil {
 		fmt.Println("Files.Find",err)
 		DBErrCount.Inc(1)
-		reqUploadDoneErrCount.Inc(1)
 		panic(err)
+	}
+
+	if len(objFile) == 0 {
+		cookie, err := req.Cookie(uuid)
+		if err == nil && cookie.Value != "" && bson.IsObjectIdHex(cookie.Value ){
+			fmt.Println("no file")
+			gridFs.Chunks.RemoveAll(bson.M{"files_id":bson.ObjectIdHex(cookie.Value)})
+			panic(err)
+		} else {
+			fmt.Println("no file and no cookie")
+			//fmt.Println(cookie)
+			panic(err)
+		}
 	}
 
 	firstFile := objFile[0]
@@ -692,14 +705,12 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 			if err != nil {
 				fmt.Println("Chunks.Update",err)
 				DBErrCount.Inc(1)
-				reqUploadDoneErrCount.Inc(1)
 				panic(err)
 			}
 			err = gridFs.Files.Remove(bson.M{"_id":file.Id})
 			if err != nil {
 				fmt.Println("Files.Remove",err)
 				DBErrCount.Inc(1)
-				reqUploadDoneErrCount.Inc(1)
 				panic(err)
 			}
 		}
@@ -709,7 +720,6 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 	if err != nil {
 		fmt.Println("Files.Update",err)
 		DBErrCount.Inc(1)
-		reqUploadDoneErrCount.Inc(1)
 		panic(err)
 	}
 	reqUploadDoneOkCount.Inc(1)
