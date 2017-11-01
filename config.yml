@@ -2,4 +2,4 @@ server:
   directory: uploads
   host: 127.0.0.1
   port: 8080
-  mongo: 127.0.0.1:27017
+  mongo: 192.168.0.135:27017

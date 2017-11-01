@@ -22,7 +22,7 @@ import (
 	"github.com/gosuri/uiprogress"
 	//"github.com/vbauerster/mpb"
 	//"github.com/vbauerster/mpb/decor"
-
+	"net/http/cookiejar"
 	"context"
 	"github.com/satori/go.uuid"
 )
@@ -63,6 +63,7 @@ type BoltUploadStruct struct {
 	IndexMap map[int]int
 
 	OverIndex int
+	mapLock sync.Mutex
 }
 
 const (
@@ -76,12 +77,17 @@ const (
 	UPLOAD_FLAG_OK = 1
 )
 
-var locker sync.Mutex
+
 //var historyMap map[string]boltUploadStruct
 
 func New(conNum int,chunkSize uint64,db *bolt.DB,host string,chQuit chan os.Signal) *Uploader {
-
+	//jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
 	client := &http.Client{
+		Jar: jar,
 		Transport: &tsdbrelayHTTPTransport{
 			&httpcontrol.Transport{
 				RequestTimeout:      time.Minute,
@@ -109,7 +115,7 @@ func init() {
 
 func (s* Uploader) upload(ctx context.Context,file string,fuid string,filename string,qqtotalfilesize int64,qqpartindex int, qqpartbyteoffset int64,qqchunksize int64,qqtotalparts int ) {
 	var bResult bool = false
-
+	//fmt.Println(filename,qqpartindex)
 	if fuid == "" {
 		fmt.Println("fuid  nil")
 	}
@@ -230,17 +236,20 @@ func (s* Uploader) upload(ctx context.Context,file string,fuid string,filename s
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		fmt.Println(err)
 		//verbose("bosun relay error: %v", err)
 		return
 	}
 	buf, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
+		fmt.Println(err)
 		fmt.Printf("%s -- %v\n", string(buf), err)
 	}
 
 
 	resp.Body.Close()
 	if err != nil {
+		fmt.Println(err)
 		return
 	}
 
@@ -248,10 +257,12 @@ func (s* Uploader) upload(ctx context.Context,file string,fuid string,filename s
 
 	err = json.Unmarshal(buf,&ret)
 	if err != nil {
+		fmt.Println(err)
 		return;
 	}
 	if !ret.Success {
-
+		fmt.Println(ret)
+		return
 	}
 	//verbose("bosun relay success")
 	bResult = true
@@ -326,6 +337,12 @@ func (s* Uploader) uploadDone(fuid string,filename string,qqtotalfilesize int64,
 	resp.Body.Close()
 	//verbose("bosun relay success")
 
+}
+
+func (bolt* BoltUploadStruct)setMapData(key int,value int)  {
+	bolt.mapLock.Lock()
+	defer bolt.mapLock.Unlock()
+	bolt.IndexMap[key] = value
 }
 
 func (s* Uploader) UploadAll(file string) {
@@ -448,11 +465,13 @@ func (s* Uploader) UploadAll(file string) {
 		boltInfo.IndexMap = make(map[int]int)
 
 		for i := 0; i < int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk)))); i++  {
-			boltInfo.IndexMap[i] = UPLOAD_FLAG_UNKNOW
+			boltInfo.setMapData(i,UPLOAD_FLAG_UNKNOW)
 		}
 
 		for i  := 0; i < cNum;i++  {
 			go func(index int) {
+				boltInfo.setMapData(index,UPLOAD_FLAG_DOING)
+
 				s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
 				//
 			}(i)
@@ -462,7 +481,8 @@ func (s* Uploader) UploadAll(file string) {
 
 		for key, value := range boltInfo.IndexMap {
 			if value == UPLOAD_FLAG_DOING {
-				boltInfo.IndexMap[key] = 0
+				boltInfo.setMapData(key,UPLOAD_FLAG_UNKNOW)
+
 			}
 
 			if value == UPLOAD_FLAG_OK {
@@ -472,6 +492,7 @@ func (s* Uploader) UploadAll(file string) {
 			if value != UPLOAD_FLAG_OK  && inum < cNum {
 				inum++
 				go func(index int) {
+					boltInfo.setMapData(index,UPLOAD_FLAG_DOING)
 					s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
 					//
 				}(key)
@@ -538,14 +559,15 @@ func (s* Uploader) UploadAll(file string) {
 			case r := <-s.pool:
 				//fmt.Println("Acquire:共享资源",r.index)
 				var index = -1
-				locker.Lock()
+
 				if r.isok {
 					//delete(indexMap,r.index)
-					boltInfo.IndexMap[r.index] = UPLOAD_FLAG_OK
+					boltInfo.setMapData(r.index,UPLOAD_FLAG_OK)
 				} else {
-					boltInfo.IndexMap[r.index] = UPLOAD_FLAG_UNKNOW
+					boltInfo.setMapData(r.index,UPLOAD_FLAG_UNKNOW)
 					//time.Sleep(time.Millisecond * 100)
 				}
+				boltInfo.mapLock.Lock()
 				for i,v := range boltInfo.IndexMap {
 					if v == UPLOAD_FLAG_UNKNOW {
 						boltInfo.IndexMap[i] = UPLOAD_FLAG_DOING
@@ -553,8 +575,9 @@ func (s* Uploader) UploadAll(file string) {
 						break
 					}
 				}
+				boltInfo.mapLock.Unlock()
 
-				locker.Unlock()
+
 				if index > -1 {
 					var size int64 = int64(filechunk)
 					if finfo.Size() <= int64(uint64(index+1) * filechunk) {
@@ -577,12 +600,14 @@ func (s* Uploader) UploadAll(file string) {
 
 
 	var allOver bool = true
+	boltInfo.mapLock.Lock()
 	for _,v := range boltInfo.IndexMap {
 		if v != 1 {
 			allOver = false
 			break
 		}
 	}
+	boltInfo.mapLock.Unlock()
 
 	if allOver {
 		s.uploadDone(boltInfo.CheckSum,finfo.Name(),finfo.Size(),qqtotalparts)
