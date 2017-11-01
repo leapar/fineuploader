@@ -66,6 +66,10 @@ const (
 )
 
 var (
+	reqUploadTime = metrics.NewRegisteredGaugeFloat64("upload.request.time", metrics.DefaultRegistry)
+	writeChunkTime = metrics.NewRegisteredGaugeFloat64("upload.write.chunk.time", metrics.DefaultRegistry)
+	uploadICPTime = metrics.NewRegisteredGaugeFloat64("upload.io.copy.time", metrics.DefaultRegistry)
+
 	reqUploadCount = metrics.NewRegisteredCounter("upload.request", metrics.DefaultRegistry)
 	reqUploadOkCount = metrics.NewRegisteredCounter("upload.request.ok", metrics.DefaultRegistry)
 	reqUploadErrCount = metrics.NewRegisteredCounter("upload.request.error", metrics.DefaultRegistry)
@@ -77,6 +81,8 @@ var (
 	reqUploadDoneParamErrCount = metrics.NewRegisteredCounter("uploaddone.request.params.error", metrics.DefaultRegistry)
 
 	DBErrCount = metrics.NewRegisteredCounter("db.error", metrics.DefaultRegistry)
+
+
 
 
 )
@@ -112,9 +118,14 @@ func (srv *HttpServer) Start() {
 	}
 	srv.session = session
 	defer srv.session.Close()
+	index := mgo.Index{
+		Key:    []string{"files_id", "n"},
+		Unique: true,
+	}
 
-	//database := session.DB("fileserver")
-	//srv.gridFs = database.GridFS("uploader")
+	database := session.DB(DATA_BASE)
+	gridFs := database.GridFS(PREFIX)
+	gridFs.Chunks.EnsureIndex(index)
 
 	http.HandleFunc("/upload",srv.UploadHandler)
 	http.HandleFunc("/chunksdone", srv.ChunksDoneHandler)
@@ -367,6 +378,8 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+
+
 	file, _, err := req.FormFile(paramFile)
 	if err != nil {
 		log.Println(err)
@@ -384,6 +397,7 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 	defer srv.bufferPool.PutBuffer(buf)
 	io.Copy(buf,file)
 
+
 //	fmt.Println(nr)
 	/*io.CopyBuffer()
 
@@ -398,6 +412,9 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 	index,err := strconv.Atoi(req.FormValue(paramPartIndex))
 	//fmt.Println(len(buf.Bytes()))
 	id := srv.writeChunks(req,index,buf.Bytes(),uuid,chunkSize,totalSize,req.FormValue(paramFileName))
+
+
+
 
 
 	expires := time.Now().AddDate(1, 0, 0)
@@ -415,6 +432,7 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 
 	srv.writeUploadResponse(w, nil)
 	reqUploadOkCount.Inc(1)
+
 }
 
 func (srv *HttpServer)getFinalFileID(req *http.Request,uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
@@ -475,7 +493,10 @@ var bytesBufferPool = sync.Pool{
 
 func (srv*HttpServer)writeChunks(req *http.Request,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) string {
 
-
+	start := time.Now().UnixNano()
+	defer func() {
+		writeChunkTime.Update((float64(time.Now().UnixNano() - start) / float64(1e9)))
+	}()
 
 	// We may not own the memory of data, so rather than
 	// simply copying it, we'll marshal the document ahead of time.
@@ -581,7 +602,9 @@ func (srv *HttpServer) writeGridFile(filename string,
 }
 
 func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
+	start := time.Now().UnixNano()
 	defer func() {
+		reqUploadTime.Update((float64(time.Now().UnixNano() - start) / float64(1e9)))
 
 		if r := recover(); r != nil {
 			fmt.Println("panic upload error")
@@ -589,10 +612,15 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
+	start2 := time.Now().UnixNano()
+
 	reqUploadCount.Inc(1)
 	//atomic.AddInt64(&reqUploadCount,1)
 	req.ParseMultipartForm(64)
 	partIndex := req.FormValue(paramPartIndex)
+
+	end2 := time.Now().UnixNano()
+	uploadICPTime.Update(float64(end2-start2) / float64(1e9))
 	if len(partIndex) == 0 {
 		srv.singleFile(w,req)
 		return
