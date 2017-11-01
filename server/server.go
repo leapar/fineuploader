@@ -16,8 +16,12 @@ import (
 	_ "net/http/pprof"
 	"strings"
 	"math"
-	"sync"
+
 	"github.com/NYTimes/gziphandler"
+	"sync"
+	"io"
+
+
 )
 
 type UploadResponse struct {
@@ -55,6 +59,10 @@ const (
 	paramTotalParts      = "qqtotalparts"     // total parts
 	paramFileName        = "qqfilename"       // file name for chunked requests
 	paramChunkSize       = "qqchunksize"      // size of the chunks
+
+
+	DATA_BASE = "fileserver"
+	PREFIX = "uploader"
 )
 
 var (
@@ -79,9 +87,9 @@ type HttpServer struct {
 	dir string
 	mongo string
 	session *mgo.Session
-	gridFs *mgo.GridFS
-
-	lock sync.Mutex//并发上传时候 查询文件是否存在 不存在就创建一个file对象 这时候需要互斥
+	//gridFs *mgo.GridFS
+	lock sync.Mutex
+	bufferPool BufferPool
 }
 
 func New(port int,host string,mongo string,dir string) *HttpServer {
@@ -90,39 +98,9 @@ func New(port int,host string,mongo string,dir string) *HttpServer {
 		port:port,
 		dir:dir,
 		mongo:mongo,
+		bufferPool: NewSyncPool(64),
 	}
 }
-
-
-func (srv *HttpServer) EnsureConnected(){
-	defer func() {
-		if r := recover(); r != nil {
-			log.Println("ReConnect....")
-			//Your reconnect logic here.
-			session, err := mgo.Dial(srv.mongo)
-			if err != nil {
-				log.Println("[grid]mgo.Dial ", err)
-				panic(err)
-				return
-			}
-			srv.session = session
-
-			database := session.DB("test")
-			srv.gridFs = database.GridFS("uploader")
-			log.Println("ReConnect ok")
-		}
-	}()
-
-	//Ping panics if session is closed. (see mgo.Session.Panic())
-	err := srv.session.Ping()
-	if err != nil {
-		srv.session.Close()
-		log.Println("ping:",err)
-		DBErrCount.Inc(1)
-		panic(err)
-	}
-}
-
 
 func (srv *HttpServer) Start() {
 	session, err := mgo.Dial(srv.mongo)
@@ -135,8 +113,8 @@ func (srv *HttpServer) Start() {
 	srv.session = session
 	defer srv.session.Close()
 
-	database := session.DB("test")
-	srv.gridFs = database.GridFS("uploader")
+	//database := session.DB("fileserver")
+	//srv.gridFs = database.GridFS("uploader")
 
 	http.HandleFunc("/upload",srv.UploadHandler)
 	http.HandleFunc("/chunksdone", srv.ChunksDoneHandler)
@@ -180,12 +158,19 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 
 		return
 	}
-	srv.EnsureConnected()
+
 	fileId := req.FormValue("id")
 	var objFile gfsFile
-	err := srv.gridFs.Files.Find(bson.M{ "md5":fileId }).One(&objFile)
+
+	session := srv.session.Copy()
+	defer session.Close()
+	database := session.DB(DATA_BASE)
+	gridFs := database.GridFS(PREFIX)
+
+	err := gridFs.Files.Find(bson.M{ "md5":fileId }).One(&objFile)
 	if err != nil {
 		//http.Error(w, "no file", http.StatusNotFound)
+		fmt.Println(err)
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -245,7 +230,10 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 			}
 
 			var chunk gfsChunk
-			err = srv.gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
+
+
+
+			err = gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
 			//err = srv.gridFs.Chunks.Find(bson.M{ "files_id":objFile.Id }).Sort("n").All(&chunks)
 			if err != nil {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -277,7 +265,10 @@ func (srv *HttpServer) DownloadHandler(w http.ResponseWriter, req *http.Request)
 
 	w.WriteHeader(http.StatusOK)
 	for i := 0; i < int(math.Ceil(float64(objFile.Length) / float64(objFile.ChunkSize)));i++  {
-		err = srv.gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
+
+
+
+		err = gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
 		if err != nil {
 			fmt.Println(err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -384,25 +375,72 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer file.Close()
-	datas,err := ioutil.ReadAll(file)
+
+	buf := srv.bufferPool.GetBuffer()
+	if len(buf.Bytes()) > 0 {
+		fmt.Println(len(buf.Bytes()))
+	}
+
+	defer srv.bufferPool.PutBuffer(buf)
+	io.Copy(buf,file)
+
+//	fmt.Println(nr)
+	/*io.CopyBuffer()
+
+	io.Copy()
+	*/
+	//srv.writeUploadResponse(w, err)
+	//return
+	//datas,err := ioutil.ReadAll(file)
 
 	chunkSize,err := strconv.Atoi(req.FormValue(paramChunkSize))
 	totalSize,err := strconv.Atoi(req.FormValue(paramTotalFileSize))
 	index,err := strconv.Atoi(req.FormValue(paramPartIndex))
-	srv.writeChunks(index,datas,uuid,chunkSize,totalSize,req.FormValue(paramFileName))
+	//fmt.Println(len(buf.Bytes()))
+	id := srv.writeChunks(req,index,buf.Bytes(),uuid,chunkSize,totalSize,req.FormValue(paramFileName))
+
+
+	expires := time.Now().AddDate(1, 0, 0)
+	ck := http.Cookie{
+		Name: uuid,
+		//Domain:  srv.host,//fmt.Sprintf("%s:%d",srv.host, srv.port),
+		Path: "/",
+		Expires: expires,
+	}
+	// value of cookie
+	ck.Value = id
+	// write the cookie to response
+	http.SetCookie(w, &ck)
+
 
 	srv.writeUploadResponse(w, nil)
 	reqUploadOkCount.Inc(1)
 }
 
-func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
-	srv.EnsureConnected()
+func (srv *HttpServer)getFinalFileID(req *http.Request,uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
+
+	//
+	//
+
+	cookie, err := req.Cookie(uuid)
+	if err == nil && cookie.Value != "" && bson.IsObjectIdHex(cookie.Value ){
+		//fmt.Println(cookie)
+		return bson.ObjectIdHex(cookie.Value)
+	} else {
+		//fmt.Println(cookie)
+	}
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
-
 	var objFile gfsFile
 	//err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
-	err := srv.gridFs.Files.Find(bson.M{ "md5": uuid}).One(&objFile)
+	session := srv.session.Copy()
+	defer session.Close()
+	database := session.DB(DATA_BASE)
+	gridFs := database.GridFS(PREFIX)
+
+
+	err = gridFs.Files.Find(bson.M{ "md5": uuid}).One(&objFile)
+
 	if err == nil {
 		return objFile.Id
 	}
@@ -416,7 +454,9 @@ func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int
 		Filename:fmt.Sprintf("%s", filename),
 		MD5:uuid,
 	}
-	err = srv.gridFs.Files.Insert(objFile)
+
+
+	err = gridFs.Files.Insert(objFile)
 	if err != nil {
 		DBErrCount.Inc(1)
 		log.Println("Files.Insert",err)
@@ -426,27 +466,65 @@ func (srv *HttpServer)getFinalFileID(uuid string,chunkSize int,totalFileSize int
 	return finalId
 }
 
-func (srv*HttpServer)writeChunks(index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string)  {
+var bytesBufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 0, 256)
+	},
+}
+
+
+func (srv*HttpServer)writeChunks(req *http.Request,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) string {
+
 
 
 	// We may not own the memory of data, so rather than
 	// simply copying it, we'll marshal the document ahead of time.
-	fileid := srv.getFinalFileID(uuid,chunkSize,totalSize,filename)
-	data, err := bson.Marshal(gfsChunk{bson.NewObjectId(), fileid, index, datas})
+	fileid := srv.getFinalFileID(req,uuid,chunkSize,totalSize,filename)
+	id,_ := fileid.(bson.ObjectId)
+
+	buf := bytesBufferPool.Get().([]byte)
+	defer func() {
+		bytesBufferPool.Put(buf[:0])
+	}()
+
+	//fmt.Printf("%d %v %s\n",len(datas),unsafe.Pointer(&datas),"  in")
+	data, err := bson.MarshalBuffer(gfsChunk{bson.NewObjectId(), fileid, index, datas},buf)
+	//fmt.Printf("%d %v %s\n",len(datas),unsafe.Pointer(&datas),"  out")
+
 	if err != nil {
 		log.Println(err)
 		panic(err)
-		return
+		return id.Hex()
 	}
-	srv.gridFs.Chunks.Remove(bson.M{"files_id":fileid,"n":index})
-	err = srv.gridFs.Chunks.Insert(bson.Raw{Data: data})
+
+	session := srv.session.Copy()
+	defer session.Close()
+	database := session.DB(DATA_BASE)
+	gridFs := database.GridFS(PREFIX)
+
+
+	//gridFs.Chunks.Remove(bson.M{"files_id":fileid,"n":index})
+	err = gridFs.Chunks.Insert(bson.Raw{Data: data})
 
 	if err != nil{
+		//fmt.Println("E11000")
+		if strings.LastIndex(err.Error(),"E11000") != -1 {
+			gridFs.Chunks.Remove(bson.M{"files_id":fileid,"n":index})
+			err = gridFs.Chunks.Insert(bson.Raw{Data: data})
+			if err != nil{
+				log.Println("retry",err)
+				DBErrCount.Inc(1)
+				panic(err)
+			}
+		}else {
+			log.Println(err)
+			DBErrCount.Inc(1)
+			panic(err)
+		}
+		//192.168.0.135
 
-		log.Println(err)
-		DBErrCount.Inc(1)
-		panic(err)
 	}
+	return id.Hex()
 }
 
 func (srv *HttpServer) writeGridFile(filename string,
@@ -459,8 +537,15 @@ func (srv *HttpServer) writeGridFile(filename string,
 	index int,
 	datas []byte)  {
 
-	srv.EnsureConnected()
-	gridFile, err := srv.gridFs.Create(filename)
+
+
+	session := srv.session.Copy()
+	defer session.Close()
+	database := session.DB(DATA_BASE)
+	gridFs := database.GridFS(PREFIX)
+
+
+	gridFile, err := gridFs.Create(filename)
 	if err != nil {
 		DBErrCount.Inc(1)
 		log.Println(err)
@@ -506,6 +591,7 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 
 	reqUploadCount.Inc(1)
 	//atomic.AddInt64(&reqUploadCount,1)
+	req.ParseMultipartForm(64)
 	partIndex := req.FormValue(paramPartIndex)
 	if len(partIndex) == 0 {
 		srv.singleFile(w,req)
@@ -515,9 +601,22 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 	return
 }
 
-func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
 
+
+func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request) {
+	uuid := req.FormValue(paramUuid)
 	defer func() {
+		expires := time.Now().AddDate(-1, 0, 0)
+		ck := http.Cookie{
+			Name: uuid,
+			//Domain:  srv.host,//fmt.Sprintf("%s:%d",srv.host, srv.port),
+			Path: "/",
+			Expires: expires,
+		}
+		// value of cookie
+		ck.Value = ""
+		// write the cookie to response
+		http.SetCookie(w, &ck)
 
 		if r := recover(); r != nil {
 			fmt.Println("panic upload done error")
@@ -525,13 +624,12 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 		}
 	}()
 
-
 	if req.Method != http.MethodPost {
 		errorMsg := fmt.Sprintf("Method [%s] is not supported", req.Method)
 		http.Error(w, errorMsg, http.StatusMethodNotAllowed)
 	}
 	reqUploadDoneCount.Inc(1)
-	uuid := req.FormValue(paramUuid)
+
 	filename := req.FormValue(paramFileName)
 
 	if uuid == ""  || filename == ""{
@@ -539,21 +637,52 @@ func (srv *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Request
 		return
 	}
 
+	session := srv.session.Copy()
+	defer session.Close()
+	database := session.DB(DATA_BASE)
+	gridFs := database.GridFS(PREFIX)
 
-	var objFile gfsFile
-	srv.EnsureConnected()
+	var objFile []gfsFile
+
 	//err := srv.gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s#%s", uuid,filename), "i"}}).One(&objFile)
 	//count,err := gridFs.Files.Find(bson.M{ "filename": bson.RegEx{fmt.Sprintf("%s", uuid), "i"}}).Count()
-	err := srv.gridFs.Files.Find(bson.M{ "md5": uuid}).One(&objFile)
+	err := gridFs.Files.Find(bson.M{ "md5": uuid}).All(&objFile)
 	if err != nil {
+		fmt.Println("Files.Find",err)
 		DBErrCount.Inc(1)
 		reqUploadDoneErrCount.Inc(1)
+		panic(err)
 	}
 
-	err = srv.gridFs.Files.Update(bson.M{"_id":objFile.Id}, bson.M{"$set": bson.M{ "uploadDate":  bson.Now(), }})
+	firstFile := objFile[0]
+	if len(objFile) > 1 {
+		log.Println("len(objFile)")
+		//并发上传时候 第一次有可能并发导致创建了多个文件 这时候需要清理  ，当然创建文件时候才有锁机制也可以，但是性能不行
+		for i := 1; i < len(objFile);i++  {
+			file := objFile[i]
+			err := gridFs.Chunks.Update(bson.M{"files_id":file.Id}, bson.M{"$set": bson.M{ "files_id":  firstFile.Id, }})
+			if err != nil {
+				fmt.Println("Chunks.Update",err)
+				DBErrCount.Inc(1)
+				reqUploadDoneErrCount.Inc(1)
+				panic(err)
+			}
+			err = gridFs.Files.Remove(bson.M{"_id":file.Id})
+			if err != nil {
+				fmt.Println("Files.Remove",err)
+				DBErrCount.Inc(1)
+				reqUploadDoneErrCount.Inc(1)
+				panic(err)
+			}
+		}
+	}
+
+	err = gridFs.Files.Update(bson.M{"_id":firstFile.Id}, bson.M{"$set": bson.M{ "uploadDate":  bson.Now(), }})
 	if err != nil {
+		fmt.Println("Files.Update",err)
 		DBErrCount.Inc(1)
 		reqUploadDoneErrCount.Inc(1)
+		panic(err)
 	}
 	reqUploadDoneOkCount.Inc(1)
 
