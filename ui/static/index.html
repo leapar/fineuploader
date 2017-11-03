@@ -89,10 +89,12 @@
 <script>
     // Some options to pass to the uploader are discussed on the next page
     var uploader = new qq.FineUploader({
+
         element: document.getElementById("uploader"),
         //element: document.getElementById("fineuploader-container"),
         request: {
-            endpoint: "/upload"
+            endpoint: "/upload",
+            //paramsInBody: false,
         },
         deleteFile: {
             enabled: true,

@@ -5700,6 +5700,7 @@
                 if (spec.paramsInBody) {
                     qq.obj2FormData(params, formData);
                 }
+                formData.append()
                 formData.append(spec.inputName, fileOrBlob);
                 return formData;
             }

@@ -1,11 +1,23 @@
 [server]
-    directory = "uploads"
-    host = "127.0.0.1"
+    output = "direct"
+    storage = "mongodb"
+    host = "0.0.0.0"
     port = 8080
+
+[input.nsq]
+    enable = true
+    nsqd = "192.168.0.135:4161"
+    topic = "file"
+    channel = "client"
+
+[output.nsq]
+    nsqd = "192.168.0.135:4150"
+    topic = "file"
+
+[storage.mongodb]
     mongo = "127.0.0.1:27017"
 
-#[influxdb]
-#    password = ""
-#    host = "127.0.0.1:8086"
-#    username = ""
-#    database = "db"
+[storage.file]
+     directory = "uploads"
+
+
