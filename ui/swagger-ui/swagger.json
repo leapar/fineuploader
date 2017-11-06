@@ -23,6 +23,56 @@
     "http"
   ],
   "paths": {
+    "/preupload": {
+      "post": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "准备上传接口，服务器返回cookie含有文件id",
+        "description": "",
+        "consumes": [
+          "multipart/form-data"
+        ],
+        "produces": [
+          "application/json"
+        ],
+        "parameters": [
+          {
+            "name": "qquuid",
+            "in": "formData",
+            "description": "文件唯一id",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "qqfilename",
+            "in": "formData",
+            "description": "文件名",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "qqtotalfilesize",
+            "in": "formData",
+            "description": "文件总大小",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "name": "qqchunksize",
+            "in": "formData",
+            "description": "分块大小，文件切分单位",
+            "required": false,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "successful operation"
+          }
+        }
+      }
+    },
     "/upload": {
       "post": {
         "tags": [
