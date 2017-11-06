@@ -26,4 +26,5 @@ type Storager interface {
 
 	WriteChunkPacket(index int,datas []byte,fileid string)
 
+	GetFinalFileID(cookie string, uuid string,chunkSize int,totalFileSize int,filename string) interface{}
 }

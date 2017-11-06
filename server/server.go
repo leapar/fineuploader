@@ -22,6 +22,8 @@ import (
 	"io"
 	"../utils"
 	"strconv"
+	"gopkg.in/mgo.v2/bson"
+	"strings"
 )
 
 type HttpServer struct {
@@ -50,7 +52,11 @@ func (srv *HttpServer) Start() {
 	/*srv.Init("127.0.0.1:4150")
 	*/
 
+	//提交上传文件信息，获取文件ID存入COOKIE
+	http.HandleFunc("/preupload",srv.PreUploadHandler)
+	//上传文件块
 	http.HandleFunc("/upload",srv.UploadHandler)
+	//上传完成
 	http.HandleFunc("/chunksdone", srv.ChunksDoneHandler)
 	http.Handle("/upload/", http.StripPrefix("/upload/", http.HandlerFunc(srv.UploadHandler)))
 	http.HandleFunc("/res/", func(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +94,111 @@ func (srv *HttpServer) Metrics(w http.ResponseWriter, req *http.Request) {
 
 	w.Write(b)
 }
+
+func (srv *HttpServer) PreUploadHandler(w http.ResponseWriter, req *http.Request) {
+
+	switch req.Method {
+	case http.MethodPost:
+		srv.preupload(w, req)
+		return
+	case http.MethodDelete:
+		//	srv.delete(w, req)
+		return
+	}
+	errorMsg := fmt.Sprintf("Method [%s] is not supported:", req.Method)
+	http.Error(w, errorMsg, http.StatusMethodNotAllowed)
+}
+
+func (srv *HttpServer)preupload(w http.ResponseWriter, req *http.Request) {
+	defer func() {
+		req.Body.Close()
+	}()
+
+	//atomic.AddInt64(&reqUploadCount,1)
+	//req.ParseMultipartForm(64)
+	forms := make(map[string]string)
+	var blob   *bytebufferpool.ByteBuffer
+
+	reader,err := req.MultipartReader()
+	if  err != nil {
+		fmt.Println(err)
+		panic(err)
+	}
+
+	for {
+		part, err_part := reader.NextPart()
+		if err_part == io.EOF {
+			break
+		}
+		if err_part != nil {
+			panic(err_part)
+			fmt.Println("err_part",err_part)
+			break
+		}
+		name := strings.TrimSpace(part.FormName())
+		if name == "" {
+			continue
+		}
+
+		buf := bytebufferpool.Get()
+		defer func() {
+			bytebufferpool.Put(buf)
+		}()
+
+		if name !=  def.ParamFile {
+			buf.ReadFrom(part)
+			//log.Println(name,"  is: ", buf.String())
+			forms[name] = buf.String()
+
+		} else {
+			//forms[def.ParamFile] = part.FileName()
+			//log.Println(def.ParamFile,part.FileName())
+			buf.ReadFrom(io.MultiReader(part))
+			blob = buf
+
+		}
+	}
+
+	srv.getID(w,req,&forms,blob)
+	return
+}
+
+func (srv *HttpServer)getID(w http.ResponseWriter, req *http.Request,forms *map[string]string,blob*bytebufferpool.ByteBuffer) {
+	uuid,ok := (*forms)[def.ParamUuid]
+	if !ok || len(uuid) == 0 {
+		log.Printf("No uuid received, invalid upload request")
+		http.Error(w, "No uuid received", http.StatusBadRequest)
+		return
+	}
+
+	chunkSize,err := strconv.Atoi((*forms)[def.ParamChunkSize])
+	if err != nil {
+		fmt.Println(err)
+	}
+	totalSize,err := strconv.Atoi((*forms)[def.ParamTotalFileSize])
+
+	//fmt.Println(len(buf.Bytes()))
+	cookie, err := req.Cookie(uuid)
+	cookieVae := ""
+	if err == nil {
+		cookieVae = cookie.Value
+	}
+	id := srv.config.Storage.GetFinalFileID(cookieVae,uuid,chunkSize,totalSize,(*forms)[def.ParamFileName])
+	expires := time.Now().AddDate(1, 0, 0)
+	ck := http.Cookie{
+		Name: uuid,
+		//Domain:  srv.host,//fmt.Sprintf("%s:%d",srv.host, srv.port),
+		Path: "/",
+		Expires: expires,
+	}
+	// value of cookie
+	file_id,_ := id.(bson.ObjectId)
+	ck.Value = file_id.Hex()
+	// write the cookie to response
+	http.SetCookie(w, &ck)
+	utils.WriteUploadResponse(w, nil)
+}
+
 
 func (srv *HttpServer) UploadHandler(w http.ResponseWriter, req *http.Request) {
 

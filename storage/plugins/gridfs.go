@@ -55,7 +55,12 @@ func (srv *OutputGridfs)Init(url string) {
 	gridFs.Chunks.EnsureIndex(index)
 }
 
-func (srv *OutputGridfs)getFinalFileID(uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
+func (srv *OutputGridfs)GetFinalFileID(cookie string, uuid string,chunkSize int,totalFileSize int,filename string) interface{}{
+	if  bson.IsObjectIdHex(cookie) {
+		//fmt.Println(cookie)
+		return bson.ObjectIdHex(cookie)
+	}
+
 	srv.lock.Lock()
 	defer srv.lock.Unlock()
 	var objFile def.GfsFile
@@ -212,13 +217,7 @@ func (srv*OutputGridfs)PacketChunks(cookie string,index int,datas []byte,uuid st
 
 	var id bson.ObjectId
 
-	if  bson.IsObjectIdHex(cookie) {
-		//fmt.Println(cookie)
-		id = bson.ObjectIdHex(cookie)
-	} else {
-		//fmt.Println(cookie)
-		id = srv.getFinalFileID(uuid,chunkSize,totalSize,filename).(bson.ObjectId)
-	}
+	id = srv.GetFinalFileID(cookie,uuid,chunkSize,totalSize,filename).(bson.ObjectId)
 
 	buf := bytebufferpool.Get()
 	defer func() {
