@@ -22,6 +22,8 @@ import (
 	"github.com/gosuri/uiprogress"
 	"sync"
 	"encoding/json"
+	"github.com/dustin/go-humanize"
+	"strconv"
 )
 
 var (
@@ -152,6 +154,18 @@ func (d *DownLoader) Download(url string,timeout int) {
 	//bar.AppendCompleted()
 	//bar.PrependElapsed()
 
+
+	speed_start := time.Now()
+	speed_elapsed := time.Duration(1)
+	bar.AppendFunc(
+		func(b *uiprogress.Bar) string {
+			// elapsed := b.TimeElapsed()
+			if b.Current() < b.Total {
+				speed_elapsed = time.Now().Sub(speed_start)
+			}
+			speed := uint64(float64(b.Current()) * float64(d.info.ChunkSize) / speed_elapsed.Seconds())
+			return humanize.IBytes(speed) + "/sec"
+		})
 
 //	defer d.boltDB.Close()
 	defer func() {
@@ -434,7 +448,7 @@ func (d*DownLoader)follow(fileUrl, outFileName string) (int,error) {
 	for {
 		log.Printf("%s\n", next)
 		//fmt.Printf("HTTP request sent, awaiting response... ")
-		req, err := http.NewRequest(http.MethodGet, next, nil)
+		req, err := http.NewRequest(http.MethodHead, next, nil)
 		if err != nil {
 			//fmt.Println()
 			return retCode, err
@@ -467,7 +481,9 @@ func (d*DownLoader)follow(fileUrl, outFileName string) (int,error) {
 		}*/
 		d.info.AcceptRanges = resp.Header.Get("Accept-Ranges")
 		d.info.FilePath = outFileName
-		d.info.FileSize = resp.ContentLength
+		len, err := strconv.ParseInt(resp.Header.Get("Content-Length"),10,0)
+		d.info.FileSize = len
+		//d.info.FileSize = resp.ContentLength
 		d.info.Location = next
 
 		if !d.isRedirect(resp.StatusCode) {

@@ -20,6 +20,7 @@ import (
 	"log"
 	"github.com/facebookgo/httpcontrol"
 	"github.com/gosuri/uiprogress"
+	"github.com/dustin/go-humanize"
 	//"github.com/vbauerster/mpb"
 	//"github.com/vbauerster/mpb/decor"
 	"net/http/cookiejar"
@@ -63,6 +64,7 @@ type BoltUploadStruct struct {
 	IndexMap map[int]int
 
 	OverIndex int
+	TotalPart int
 	mapLock sync.Mutex
 }
 
@@ -301,7 +303,7 @@ func (s* Uploader) preUpload(fuid string,filename string,qqtotalfilesize int64,c
 	if fw, err = w.CreateFormField("qqchunksize"); err != nil {
 		return err
 	}
-	if _, err = fw.Write([]byte(strconv.FormatInt(qqtotalfilesize, 10))); err != nil {
+	if _, err = fw.Write([]byte(strconv.Itoa(chucksize))); err != nil {
 		return err
 	}
 
@@ -442,6 +444,9 @@ func (s* Uploader) UploadAll(file string) {
 
 
 
+
+
+
 	//defer boltDB.Close()
 	defer func() {
 		//fmt.Println("uiprogress.Stop()")
@@ -512,9 +517,11 @@ func (s* Uploader) UploadAll(file string) {
 	//fmt.Printf("%s checksum is %x\n", file,checksum2)
 
 	//fmt.Println(err)
+	qqtotalparts := int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
+	boltInfo.TotalPart = qqtotalparts
 
 	if finfo.Size() <= int64(cNum)*(int64(filechunk)) {
-		cNum = int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
+		cNum = boltInfo.TotalPart
 	}
 
 	err = s.preUpload(boltInfo.CheckSum,finfo.Name(),finfo.Size(),int(filechunk))
@@ -524,7 +531,20 @@ func (s* Uploader) UploadAll(file string) {
 	}
 	//fmt.Println(math.Ceil(3.0/2.0))
 
-	qqtotalparts := int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
+
+
+
+	speed_start := time.Now()
+	speed_elapsed := time.Duration(1)
+	bar.AppendFunc(
+		func(b *uiprogress.Bar) string {
+			// elapsed := b.TimeElapsed()
+			if b.Current() < b.Total {
+				speed_elapsed = time.Now().Sub(speed_start)
+			}
+			speed := uint64(float64(b.Current()) * float64(boltInfo.ChunkSize) / speed_elapsed.Seconds())
+			return humanize.IBytes(speed) + "/sec"
+		})
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -533,7 +553,7 @@ func (s* Uploader) UploadAll(file string) {
 	if len(boltInfo.IndexMap) == 0 {
 		boltInfo.IndexMap = make(map[int]int)
 
-		for i := 0; i < int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk)))); i++  {
+		for i := 0; i < boltInfo.TotalPart; i++  {
 			boltInfo.setMapData(i,UPLOAD_FLAG_UNKNOW)
 		}
 
