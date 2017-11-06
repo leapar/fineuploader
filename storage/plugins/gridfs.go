@@ -268,7 +268,7 @@ func (srv*OutputGridfs)WriteChunkPacket(index int,datas []byte,fileid string){
 
 
 func (srv *OutputGridfs) DownloadHandler(w http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
 		errorMsg := fmt.Sprintf("Method [%s] is not supported:", req.Method)
 		http.Error(w, errorMsg, http.StatusMethodNotAllowed)
 
@@ -380,10 +380,11 @@ func (srv *OutputGridfs) DownloadHandler(w http.ResponseWriter, req *http.Reques
 	utils.WriteDownloadHeader(w,objFile.Filename,int(objFile.Length))
 
 	w.WriteHeader(http.StatusOK)
+
+	if req.Method == http.MethodHead {
+		return
+	}
 	for i := 0; i < int(math.Ceil(float64(objFile.Length) / float64(objFile.ChunkSize)));i++  {
-
-
-
 		err = gridFs.Chunks.Find(bson.D{{"files_id", objFile.Id}, {"n", i}}).One(&chunk)
 		if err != nil {
 			fmt.Println(err)

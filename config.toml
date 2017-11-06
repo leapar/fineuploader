@@ -1,5 +1,5 @@
 [server]
-    output = "direct"
+    output = "nsq"
     storage = "mongodb"
     host = "0.0.0.0"
     port = 8080
@@ -15,7 +15,7 @@
     topic = "file"
 
 [storage.mongodb]
-    mongo = "127.0.0.1:27017"
+    mongo = "192.168.0.135:27017"
 
 [storage.file]
      directory = "uploads"

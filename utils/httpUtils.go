@@ -26,5 +26,6 @@ func WriteUploadResponse(w http.ResponseWriter, err error) {
 func WriteDownloadHeader(w http.ResponseWriter,filename string,size int) {
 	w.Header().Add("Accept-Ranges", "bytes")
 	w.Header().Add("Content-Length", strconv.Itoa(size))
+	//fmt.Println(strconv.Itoa(size))
 	w.Header().Add("Content-Disposition", "attachment;filename="+filename)
 }
