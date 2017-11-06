@@ -24,7 +24,7 @@ import (
 	//"github.com/vbauerster/mpb/decor"
 	"net/http/cookiejar"
 	"context"
-	"github.com/satori/go.uuid"
+	//"github.com/satori/go.uuid"
 )
 
 type Uploader struct {
@@ -269,6 +269,70 @@ func (s* Uploader) upload(ctx context.Context,file string,fuid string,filename s
 
 }
 
+func (s* Uploader) preUpload(fuid string,filename string,qqtotalfilesize int64,chucksize int ) error{
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	// Add your image file
+
+	fw, err := w.CreateFormField("qqtotalfilesize")
+	if err != nil {
+		return err
+	}
+
+	if _, err = fw.Write([]byte(strconv.FormatInt(qqtotalfilesize, 10))); err != nil {
+		return err
+	}
+
+	if fw, err = w.CreateFormField("qqfilename"); err != nil {
+		return err
+	}
+	if _, err = fw.Write([]byte(filename)); err != nil {
+		return err
+	}
+
+
+	if fw, err = w.CreateFormField("qquuid"); err != nil {
+		return err
+	}
+	if _, err = fw.Write([]byte(fuid)); err != nil {
+		return err
+	}
+
+	if fw, err = w.CreateFormField("qqchunksize"); err != nil {
+		return err
+	}
+	if _, err = fw.Write([]byte(strconv.FormatInt(qqtotalfilesize, 10))); err != nil {
+		return err
+	}
+
+	// Don't forget to close the multipart writer.
+	// If you don't close it, your request will be missing the terminating boundary.
+	w.Close()
+
+	//body := bytes.NewBuffer(reader.buf.Bytes())
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/preupload",s.host), &b)//"HTTP://127.0.0.1:8081/chunksdone
+	if err != nil {
+		///verbose("bosun connect error: %v", err)
+		return err
+	}
+	// Don't forget to set the content type, this will contain the boundary.
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		//verbose("bosun relay error: %v", err)
+		return err
+	}
+	buf, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("%s -- %v\n", string(buf), err)
+		return err
+	}
+
+	resp.Body.Close()
+	//verbose("bosun relay success")
+	return nil
+}
+
 /*
 qquuid:7174ed7c-8276-48a0-be2f-d87e70935282
 qqfilename:win32-x64-51_binding.node
@@ -453,6 +517,11 @@ func (s* Uploader) UploadAll(file string) {
 		cNum = int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
 	}
 
+	err = s.preUpload(boltInfo.CheckSum,finfo.Name(),finfo.Size(),int(filechunk))
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 	//fmt.Println(math.Ceil(3.0/2.0))
 
 	qqtotalparts := int(math.Ceil(float64(float64(finfo.Size()) / float64(filechunk))))
@@ -554,7 +623,7 @@ func (s* Uploader) UploadAll(file string) {
 			case <-s.chQuit:
 				cancel()
 				//wg.Add(-cNum)
-				fmt.Println("chQuit")
+				//fmt.Println("chQuit")
 				return
 			case r := <-s.pool:
 				//fmt.Println("Acquire:共享资源",r.index)
@@ -645,7 +714,7 @@ func (s* Uploader) UploadAll(file string) {
 
 func (s* Uploader) checksum(path string ,chuncksize uint64) string {
 
-	return uuid.NewV4().String()
+//	return uuid.NewV4().String()
 
 	file, err := os.Open(path)
 

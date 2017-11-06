@@ -8,6 +8,7 @@ import (
 	//"log"
 	"github.com/boltdb/bolt"
 	Uploader "../uploader"
+	"log"
 )
 
 var chunckSize uint64//= flag.Uint64("c", 2*1024*1024, "chunk size,defaults to 2*1024*1024")
@@ -50,13 +51,13 @@ func Upload()  cli.Command{
 
 			Action: func(c *cli.Context) error {
 				var boltDB *bolt.DB
-				/*boltDB, err := bolt.Open("uploader.db", 0600, nil)
+				boltDB, err := bolt.Open("uploader.db", 0600, nil)
 				if err != nil {
 					log.Fatal(err)
 					return nil
 				}
 
-				defer boltDB.Close()*/
+				defer boltDB.Close()
 
 				if filePath == ""  {
 					cli.ShowCommandHelp(c,"upload")
