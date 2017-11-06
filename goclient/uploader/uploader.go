@@ -551,7 +551,6 @@ func (s* Uploader) UploadAll(file string) {
 		for key, value := range boltInfo.IndexMap {
 			if value == UPLOAD_FLAG_DOING {
 				boltInfo.setMapData(key,UPLOAD_FLAG_UNKNOW)
-
 			}
 
 			if value == UPLOAD_FLAG_OK {
@@ -560,8 +559,8 @@ func (s* Uploader) UploadAll(file string) {
 
 			if value != UPLOAD_FLAG_OK  && inum < cNum {
 				inum++
+				boltInfo.setMapData(key,UPLOAD_FLAG_DOING)
 				go func(index int) {
-					boltInfo.setMapData(index,UPLOAD_FLAG_DOING)
 					s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
 					//
 				}(key)
@@ -590,8 +589,9 @@ func (s* Uploader) UploadAll(file string) {
 					//bar.Incr()
 					//bar2.Incr(int((float64(1) / float64(len(boltInfo.IndexMap)))*100))
 				}
-
+				boltInfo.mapLock.Lock()
 				bar.Set(int((float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))*100))
+				boltInfo.mapLock.Unlock()
 			}
 		}
 
