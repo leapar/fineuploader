@@ -754,7 +754,7 @@ func (s* Uploader) UploadAll(file string) {
 }
 
 func (s* Uploader) checksum(path string ,chuncksize uint64) string {
-	
+
 
 	file, err := os.Open(path)
 
