@@ -28,7 +28,7 @@ func (srv*OutputDirect)WriteChunks(cookie string,index int,datas []byte,uuid str
 		def.WriteChunkTime.Update((float64(time.Now().UnixNano() - start) / float64(1e9)))
 	}()
 	datas,id := srv.config.Storage.PacketChunks(cookie,index,datas,uuid,chunkSize,totalSize,filename)
-	srv.config.Storage.WriteChunkPacket(index,datas,id)
+	srv.config.Storage.WriteChunkPacket(index,datas,id,uuid)
 
 	return id
 }

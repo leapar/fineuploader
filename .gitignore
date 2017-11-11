@@ -24,3 +24,10 @@ uploader.db
 uploader.db
 uploader.db
 *.db
+GO
+goclient/2.bat
+goclient/monkeylog.txt
+goclient/null
+GOPATH
+uploader.db
+*.db

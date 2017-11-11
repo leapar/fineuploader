@@ -93,7 +93,7 @@ func (srv *OutputGridfs)GetFinalFileID(cookie string, uuid string,chunkSize int,
 	return finalId
 }
 
-func (this *OutputGridfs)UploadDoneHandler(uuid string,file_id string) {
+func (this *OutputGridfs)UploadDoneHandler(uuid string,file_id string,filename string,totalpart int) {
 	session := this.session.Copy()
 	defer session.Close()
 	database := session.DB(def.DATA_BASE)
@@ -209,7 +209,7 @@ func (srv*OutputGridfs)WriteChunks(cookie string,index int,datas []byte,uuid str
 
 	datas,id := srv.PacketChunks(cookie,index,datas,uuid,chunkSize,totalSize,filename)
 
-	srv.WriteChunkPacket(index,datas,id)
+	srv.WriteChunkPacket(index,datas,id,uuid)
 	return id
 }
 
@@ -238,7 +238,7 @@ func (srv*OutputGridfs)PacketChunks(cookie string,index int,datas []byte,uuid st
 	return datas,id.Hex()
 }
 
-func (srv*OutputGridfs)WriteChunkPacket(index int,datas []byte,fileid string){
+func (srv*OutputGridfs)WriteChunkPacket(index int,datas []byte,fileid string,uuid string){
 	session := srv.session.Copy()
 	defer session.Close()
 	database := session.DB(def.DATA_BASE)
@@ -290,7 +290,6 @@ func (srv *OutputGridfs) DownloadHandler(w http.ResponseWriter, req *http.Reques
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-
 
 	strRange := req.Header.Get("Range")
 	if strRange != "" {

@@ -1,11 +1,11 @@
 [server]
-    output = "nsq"
-    storage = "mongodb"
+    output = "direct"
+    storage = "hdfs"
     host = "0.0.0.0"
-    port = 8080
+    port = 8089
 
 [input.nsq]
-    enable = true
+    enable = false
     nsqd = "192.168.0.135:4161"
     topic = "file"
     channel = "client"
@@ -15,9 +15,14 @@
     topic = "file"
 
 [storage.mongodb]
-    mongo = "192.168.0.135:27017"
+    url = "192.168.0.135:27017"
 
 [storage.file]
-     directory = "uploads"
+    directory = "uploads"
 
+[storage.webhdfs]
+    url = "localhost:50070"
 
+[storage.hdfs]
+    url = "0.0.0.0:9000"
+    user = "WXH"

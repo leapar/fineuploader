@@ -4,7 +4,6 @@ import (
 	"gopkg.in/urfave/cli.v1"
 	HttpServer "../server"
 	"gopkg.in/urfave/cli.v1/altsrc"
-	"fmt"
 	"../config"
 )
 
@@ -45,7 +44,7 @@ func Server()  cli.Command {
 
 
 			altsrc.NewStringFlag(cli.StringFlag{
-				Name:        "storage.mongodb.mongo",
+				Name:        "storage.mongodb.url",
 				Value:       "127.0.0.1:27017",
 				Usage:       "the mongodb url",
 				Destination: &config.OutputMongo.MongoServer,
@@ -91,11 +90,33 @@ func Server()  cli.Command {
 				Usage:       "the nsq url",
 				Destination: &config.InputNsq.Enable,
 			}),
+
+			altsrc.NewStringFlag(cli.StringFlag{
+				Name:        "storage.webhdfs.url",
+				Value:       "localhost:50070",
+				Usage:       "the webhdfs url",
+				Destination: &config.OutputWebHdfs.Url,
+			}),
+			altsrc.NewStringFlag(cli.StringFlag{
+				Name:        "storage.hdfs.url",
+				Value:       "localhost:19000",
+				Usage:       "the hdfs url",
+				Destination: &config.OutputHdfs.Url,
+			}),
+
+			altsrc.NewStringFlag(cli.StringFlag{
+				Name:        "storage.hdfs.user",
+				Value:       "",
+				Usage:       "the hdfs user",
+				Destination: &config.OutputHdfs.User,
+			}),
+
+
 		},
 
 		Action: func(c *cli.Context) error {
-			fmt.Println(config)
-			fmt.Println(config.OutputMongo.MongoServer)
+			//fmt.Println(config)
+			//fmt.Println(config.OutputMongo.MongoServer)
 			downloader := HttpServer.New(config)
 			downloader.Start()
 			return nil

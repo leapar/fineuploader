@@ -6,7 +6,7 @@ import (
 
 type Storager interface {
 
-	UploadDoneHandler(uuid string,file_id string)
+	UploadDoneHandler(uuid string,file_id string,filename string,totalpart int)
 
 	DownloadHandler(w http.ResponseWriter, req *http.Request)
 
@@ -20,11 +20,11 @@ type Storager interface {
 		index int,
 		datas []byte)
 
-	WriteChunks(cookie string,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) string
+
 
 	PacketChunks(cookie string,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) (out []byte,oid string)
 
-	WriteChunkPacket(index int,datas []byte,fileid string)
+	WriteChunkPacket(index int,datas []byte,fileid string,uuid string)
 
 	GetFinalFileID(cookie string, uuid string,chunkSize int,totalFileSize int,filename string) interface{}
 }

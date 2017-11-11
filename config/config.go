@@ -9,6 +9,8 @@ type Config struct {
 	Output string
 	OutputMongo MongoConfig
 	OutputNsq NsqConfig
+	OutputWebHdfs WebHdfsConfig
+	OutputHdfs HdfsConfig
 	InputNsq NsqConfig
 	StorageName string
 	Storage def.Storager
@@ -24,3 +26,13 @@ type NsqConfig struct {
 	Topic string
 	Channel string
 }
+
+type WebHdfsConfig struct {
+	Url string
+}
+
+type HdfsConfig struct {
+	Url string
+	User string
+}
+

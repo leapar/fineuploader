@@ -57,7 +57,7 @@ func (srv *IutputNSQ) HandleMessage(msg *nsq.Message) error {
 	}
 	id,_ := (chunk.FilesId).(bson.ObjectId)
 
-	srv.config.Storage.WriteChunkPacket(chunk.N,msg.Body,id.Hex())
+	srv.config.Storage.WriteChunkPacket(chunk.N,msg.Body,id.Hex(),"")
 
 	return err
 }

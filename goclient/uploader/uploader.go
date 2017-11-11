@@ -26,6 +26,8 @@ import (
 	"net/http/cookiejar"
 	"context"
 	//"github.com/satori/go.uuid"
+	"errors"
+	"github.com/satori/go.uuid"
 )
 
 type Uploader struct {
@@ -341,40 +343,40 @@ qqfilename:win32-x64-51_binding.node
 qqtotalfilesize:2172928
 qqtotalparts:2
 */
-func (s* Uploader) uploadDone(fuid string,filename string,qqtotalfilesize int64,qqtotalparts int ) {
+func (s* Uploader) uploadDone(fuid string,filename string,qqtotalfilesize int64,qqtotalparts int )error {
 	var b bytes.Buffer
 	w := multipart.NewWriter(&b)
 	// Add your image file
 
 	fw, err := w.CreateFormField("qqtotalparts")
 	if err != nil {
-		return
+		return err
 	}
 	if _, err = fw.Write([]byte(strconv.Itoa(qqtotalparts))); err != nil {
-		return
+		return err
 	}
 
 	if fw, err = w.CreateFormField("qqtotalfilesize"); err != nil {
-		return
+		return err
 	}
 
 	if _, err = fw.Write([]byte(strconv.FormatInt(qqtotalfilesize, 10))); err != nil {
-		return
+		return err
 	}
 
 	if fw, err = w.CreateFormField("qqfilename"); err != nil {
-		return
+		return err
 	}
 	if _, err = fw.Write([]byte(filename)); err != nil {
-		return
+		return err
 	}
 
 
 	if fw, err = w.CreateFormField("qquuid"); err != nil {
-		return
+		return err
 	}
 	if _, err = fw.Write([]byte(fuid)); err != nil {
-		return
+		return err
 	}
 
 
@@ -386,23 +388,28 @@ func (s* Uploader) uploadDone(fuid string,filename string,qqtotalfilesize int64,
 	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/chunksdone",s.host), &b)//"HTTP://127.0.0.1:8081/chunksdone
 	if err != nil {
 		///verbose("bosun connect error: %v", err)
-		return
+		return err
 	}
 	// Don't forget to set the content type, this will contain the boundary.
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		//verbose("bosun relay error: %v", err)
-		return
+		return err
 	}
+	defer resp.Body.Close()
 	buf, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf("%s -- %v\n", string(buf), err)
 	}
 
-	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New(fmt.Sprintf("code:%d",resp.StatusCode))
+	}
+
 	//verbose("bosun relay success")
 
+	return nil
 }
 
 func (bolt* BoltUploadStruct)setMapData(key int,value int)  {
@@ -699,7 +706,21 @@ func (s* Uploader) UploadAll(file string) {
 	boltInfo.mapLock.Unlock()
 
 	if allOver {
-		s.uploadDone(boltInfo.CheckSum,finfo.Name(),finfo.Size(),qqtotalparts)
+		attemp := -1
+		err := s.uploadDone(boltInfo.CheckSum,finfo.Name(),finfo.Size(),qqtotalparts)
+		if err != nil {
+			for attemp >= 0 {//别重试 hadoop时候第一次文件合并，但中途出错有些文件就已经删除了，第二次合并文件就不见了
+				time.Sleep(time.Microsecond * 5)
+				err := s.uploadDone(boltInfo.CheckSum,finfo.Name(),finfo.Size(),qqtotalparts)
+				if err == nil {
+					break
+				} else {
+					fmt.Println("attemp:",5-attemp)
+				}
+				attemp--
+			}
+
+		}
 		boltInfo.IsOver = true
 		log.Println("upload over")
 		boltInfo.OverTime = time.Now()
@@ -733,8 +754,7 @@ func (s* Uploader) UploadAll(file string) {
 }
 
 func (s* Uploader) checksum(path string ,chuncksize uint64) string {
-
-//	return uuid.NewV4().String()
+	
 
 	file, err := os.Open(path)
 
