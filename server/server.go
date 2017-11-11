@@ -24,7 +24,11 @@ import (
 	"strconv"
 	"gopkg.in/mgo.v2/bson"
 	"strings"
+	"bytes"
+	"github.com/oxtoacart/bpool"
 )
+
+var bufpool *bpool.BufferPool
 
 type HttpServer struct {
 	config config.Config
@@ -34,6 +38,7 @@ type HttpServer struct {
 
 
 func New(config config.Config) *HttpServer {
+	bufpool = bpool.NewBufferPool(22)
 	return &HttpServer{
 		config:config,
 	}
@@ -114,10 +119,7 @@ func (srv *HttpServer)preupload(w http.ResponseWriter, req *http.Request) {
 		req.Body.Close()
 	}()
 
-	//atomic.AddInt64(&reqUploadCount,1)
-	//req.ParseMultipartForm(64)
 	forms := make(map[string]string)
-	var blob   *bytebufferpool.ByteBuffer
 
 	reader,err := req.MultipartReader()
 	if  err != nil {
@@ -139,11 +141,8 @@ func (srv *HttpServer)preupload(w http.ResponseWriter, req *http.Request) {
 		if name == "" {
 			continue
 		}
+		buf := new(bytes.Buffer)
 
-		buf := bytebufferpool.Get()
-		defer func() {
-			bytebufferpool.Put(buf)
-		}()
 
 		if name !=  def.ParamFile {
 			buf.ReadFrom(part)
@@ -151,19 +150,21 @@ func (srv *HttpServer)preupload(w http.ResponseWriter, req *http.Request) {
 			forms[name] = buf.String()
 
 		} else {
+			buf := bufpool.Get()
+			defer func() {
+				bufpool.Put(buf)
+			}()
 			//forms[def.ParamFile] = part.FileName()
 			//log.Println(def.ParamFile,part.FileName())
 			buf.ReadFrom(io.MultiReader(part))
-			blob = buf
-
 		}
 	}
 
-	srv.getID(w,req,&forms,blob)
+	srv.getID(w,req,&forms)
 	return
 }
 
-func (srv *HttpServer)getID(w http.ResponseWriter, req *http.Request,forms *map[string]string,blob*bytebufferpool.ByteBuffer) {
+func (srv *HttpServer)getID(w http.ResponseWriter, req *http.Request,forms *map[string]string) {
 	uuid,ok := (*forms)[def.ParamUuid]
 	if !ok || len(uuid) == 0 {
 		log.Printf("No uuid received, invalid upload request")
@@ -184,6 +185,9 @@ func (srv *HttpServer)getID(w http.ResponseWriter, req *http.Request,forms *map[
 		cookieVae = cookie.Value
 	}
 	id := srv.config.Storage.GetFinalFileID(cookieVae,uuid,chunkSize,totalSize,(*forms)[def.ParamFileName])
+	if id == nil {
+		return
+	}
 	expires := time.Now().AddDate(1, 0, 0)
 	ck := http.Cookie{
 		Name: uuid,
@@ -244,7 +248,8 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 	//atomic.AddInt64(&reqUploadCount,1)
 	//req.ParseMultipartForm(64)
 	forms := make(map[string]string)
-	var blob   *bytebufferpool.ByteBuffer
+//	var blob   *bytebufferpool.ByteBuffer
+	var blob *bytes.Buffer
 
 	reader,err := req.MultipartReader()
 	if  err != nil {
@@ -268,10 +273,8 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 			continue
 		}
 
-		buf := bytebufferpool.Get()
-		defer func() {
-			bytebufferpool.Put(buf)
-		}()
+		buf := new(bytes.Buffer)
+
 
 		if name !=  def.ParamFile {
 			buf.ReadFrom(part)
@@ -279,6 +282,12 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 			forms[name] = buf.String()
 
 		} else {
+		//	buf := bytebufferpool.Get()
+		//bpool 预分配，免得gc太慢
+			buf := bufpool.Get()
+			defer func() {
+				bufpool.Put(buf)
+			}()
 			//forms[def.ParamFile] = part.FileName()
 			//log.Println(def.ParamFile,part.FileName())
 			buf.ReadFrom(io.MultiReader(part))
@@ -292,16 +301,16 @@ func (srv *HttpServer)upload(w http.ResponseWriter, req *http.Request) {
 	def.UploadICPTime.Update(float64(end2-start2) / float64(1e9))
 
 	if len(partIndex) == 0 {
-		srv.singleFile(w,req,&forms,blob)
+		srv.singleFile(w,req,&forms,blob.Bytes())
 		//srv.singleFile(w,req,&forms,blob)
 		return
 	}
 
-	srv.multiFile(w,req,&forms,blob)
+	srv.multiFile(w,req,&forms,blob.Bytes())
 	return
 }
 
-func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request,forms *map[string]string,blob*bytebufferpool.ByteBuffer) {
+func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request,forms *map[string]string,blob []byte) {
 	uuid := (*forms)[def.ParamUuid]
 	if len(uuid) == 0 {
 		log.Printf("No uuid received, invalid upload request")
@@ -311,19 +320,19 @@ func (srv *HttpServer)singleFile(w http.ResponseWriter, req *http.Request,forms 
 	}
 
 	filename := fmt.Sprintf("%s",  (*forms)[def.ParamFileName])
-	totalSize := len(blob.Bytes())
+	totalSize := len(blob)
 	totalPart := 1
 	offset := 0
 	index := 0
 
-	srv.config.Storage.WriteGridFile(filename,(*forms)[def.ParamFileName],uuid,totalSize,totalSize,totalPart,offset,index,blob.Bytes())
+	srv.config.Storage.WriteGridFile(filename,(*forms)[def.ParamFileName],uuid,totalSize,totalSize,totalPart,offset,index,blob)
 	utils.WriteUploadResponse(w, nil)
 
 	def.ReqUploadOkCount.Inc(1)
 }
 
 
-func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request,forms *map[string]string,blob*bytebufferpool.ByteBuffer) {
+func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request,forms *map[string]string,blob[] byte) {
 	uuid := (*forms)[def.ParamUuid]
 	if len(uuid) == 0 {
 		log.Printf("No uuid received, invalid upload request")
@@ -344,7 +353,7 @@ func (srv *HttpServer)multiFile(w http.ResponseWriter, req *http.Request,forms *
 	if err == nil {
 		cookieVae = cookie.Value
 	}
-	id := srv.outputer.WriteChunks(cookieVae,index,blob.Bytes(),uuid,chunkSize,totalSize,(*forms)[def.ParamFileName])
+	id := srv.outputer.WriteChunks(cookieVae,index,blob,uuid,chunkSize,totalSize,(*forms)[def.ParamFileName])
 
 	expires := time.Now().AddDate(1, 0, 0)
 	ck := http.Cookie{
@@ -383,6 +392,7 @@ func (this *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Reques
 		if r := recover(); r != nil {
 			fmt.Println("panic upload done error")
 			def.ReqUploadDoneErrCount.Inc(1)
+			http.Error(w, "", http.StatusInternalServerError)
 		}
 	}()
 
@@ -403,7 +413,8 @@ func (this *HttpServer)ChunksDoneHandler(w http.ResponseWriter, req *http.Reques
 	if err == nil {
 		cookieVae = cookie.Value
 	}
-	this.config.Storage.UploadDoneHandler(uuid,cookieVae)
+	index,err := strconv.Atoi(req.FormValue(def.ParamTotalParts))
+	this.config.Storage.UploadDoneHandler(uuid,cookieVae,filename,index)
 
 	def.ReqUploadDoneOkCount.Inc(1)
 }
