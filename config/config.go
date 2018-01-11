@@ -14,10 +14,13 @@ type Config struct {
 	InputNsq NsqConfig
 	StorageName string
 	Storage def.Storager
+
+	InputMongo MongoConfig
 }
 
 type MongoConfig struct {
 	MongoServer string
+	FileMd5 string
 }
 
 type NsqConfig struct {

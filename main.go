@@ -28,6 +28,7 @@ func main() {
 	}
 
 	registerCommand(app,flags,commands.Server())
+	registerCommand(app,flags,commands.Gridfs2Hdfs())
 	sort.Sort(cli.FlagsByName(app.Flags))
 	sort.Sort(cli.CommandsByName(app.Commands))
 	app.Run(os.Args)

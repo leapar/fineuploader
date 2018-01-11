@@ -16,6 +16,7 @@ import (
 	"../../def"
 	"../../config"
 	"github.com/valyala/bytebufferpool"
+
 )
 
 type OutputGridfs struct {
@@ -53,6 +54,7 @@ func (srv *OutputGridfs)Init(url string) {
 	database := session.DB(def.DATA_BASE)
 	gridFs := database.GridFS(def.PREFIX)
 	gridFs.Chunks.EnsureIndex(index)
+
 }
 
 func (srv *OutputGridfs)GetFinalFileID(cookie string, uuid string,chunkSize int,totalFileSize int,filename string) interface{}{

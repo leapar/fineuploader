@@ -69,7 +69,7 @@ func Upload()  cli.Command{
 				//log.Println(<-chQuit)
 
 				uploader := Uploader.New(conNum, chunckSize, boltDB, host, chQuit)
-				uploader.UploadAll(filePath)
+				uploader.UploadAll(filePath,nil)
 
 				return nil
 			},

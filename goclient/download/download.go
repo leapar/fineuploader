@@ -7,9 +7,6 @@ import (
 	"context"
 	"time"
 	"net/http"
-
-	"syscall"
-	"os/signal"
 	"log"
 	"regexp"
 	"io"
@@ -34,7 +31,7 @@ var (
 const (
 	rr           = 120 * time.Millisecond
 	maxRedirects = 10
-	downloadDir = "downloads"
+	//downloadDir = "downloads"
 	userAgent    = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.95 Safari/537.36"
 
 	DOWNLOAD_FLAG_NORMAL = 0
@@ -49,15 +46,15 @@ func init() {
 
 type DownLoaderInfo struct {
 	FilePath string//文件存储名称
-	CheckSum string
-	UUid string//本地生成的uuid
 
+	UUid string//本地生成的uuid
+	TargetDir string
 	AcceptRanges string
-	FileSize int64//文件总大小
+	FileSize uint64//文件总大小
 	Location string//真实请求地址
 	Parts []*Part//每个切片信息
 	OverIndex int//已经下载完成的切片数
-	ChunkSize int64//块大小
+	ChunkSize uint64//块大小
 	StartTime time.Time
 	OverTime time.Time
 	Url string//请求地址
@@ -68,13 +65,12 @@ type DownLoader struct {
 	conNum int//并发量
 	pool chan goResult
 	chQuit chan os.Signal//退出信号量
-	progress chan goResult//进度条
 	info *DownLoaderInfo
 }
 
 type Part struct {
 	//Name                 string
-	Start, Stop			 int64
+	Start, Stop			 uint64
 	Flag                 int
 	Index				 int
 }
@@ -85,7 +81,7 @@ type goResult struct {
 	isok bool
 }
 
-func New(chunkSize int64,conNum int,boltDb *bolt.DB)  *DownLoader{
+func New(chunkSize uint64,conNum int,boltDb *bolt.DB,chQuit chan os.Signal)  *DownLoader{
 	return &DownLoader{
 		info:&DownLoaderInfo{
 			ChunkSize:chunkSize,
@@ -93,38 +89,45 @@ func New(chunkSize int64,conNum int,boltDb *bolt.DB)  *DownLoader{
 		},
 		conNum: conNum,
 		pool:make(chan goResult, conNum),
-		chQuit: make(chan os.Signal,1),
-		progress:make(chan goResult, conNum),
+		chQuit: chQuit,
 		boltDB:boltDb,
 	}
 }
 
-func (d *DownLoader) Download(url string,timeout int) {
+func (d *DownLoader) Download(url string,timeout int,boltInfo *DownLoaderInfo)*DownLoaderInfo {
 	isOver := false
 	d.info.Url = url
-	d.boltDB.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("download"))
-		if b == nil {
-			return nil
-		}
-		v := b.Get([]byte(d.info.Url))
-		//fmt.Printf("%s\n", v)
-		bolt := DownLoaderInfo{}
-		err := json.Unmarshal(v,&bolt)
-		if err == nil {
-			d.info = &bolt
-			fmt.Println("start time:",bolt.StartTime)
-		}
 
-		return nil
-	})
+	if boltInfo == nil {
+		d.boltDB.View(func(tx *bolt.Tx) error {
+			b := tx.Bucket([]byte("download"))
+			if b == nil {
+				return nil
+			}
+			v := b.Get([]byte(d.info.Url))
+			//fmt.Printf("%s\n", v)
+			bolt := DownLoaderInfo{}
+			err := json.Unmarshal(v,&bolt)
+			if err == nil {
+				d.info = &bolt
+				fmt.Println("start time:",bolt.StartTime)
+			}
+
+			return nil
+		})
+	} else {
+		if boltInfo.ChunkSize == 0 {
+			boltInfo.ChunkSize = d.info.ChunkSize
+		}
+		d.info = boltInfo
+	}
+
+	d.info.OverIndex = 0
 
 	if !d.info.OverTime.IsZero()  {
 		fmt.Println("already down")
-		return
+		return d.info
 	}
-
-	d.info.StartTime = time.Now()
 
 	code,err := d.follow(url,"")
 	d.exitOnError(err)
@@ -136,9 +139,8 @@ func (d *DownLoader) Download(url string,timeout int) {
 	//} else {
 		ctx, cancel = context.WithCancel(ctx)
 	//}
-	go d.onCancelSignal(cancel)
 
-	if code == http.StatusOK {
+	if code == http.StatusOK && d.info.Parts  == nil {
 		d.calcParts()
 	}
 
@@ -148,32 +150,40 @@ func (d *DownLoader) Download(url string,timeout int) {
 		3. 启动go rountime
 		4. 获取已经上传完成的分片id
 	*/
-
-	uiprogress.Start()
-	bar := uiprogress.AddBar(100).AppendCompleted()
+	progressUI := uiprogress.New()
+	progressUI.Start()
+	bar := progressUI.AddBar(100).AppendCompleted()
 	//bar.AppendCompleted()
 	//bar.PrependElapsed()
 
 
 	speed_start := time.Now()
 	speed_elapsed := time.Duration(1)
+	speed_start_pos := 0
+	progressUI.SetRefreshInterval(500*time.Millisecond)
+	bar.PrependFunc(func(b *uiprogress.Bar) string{
+		return "下载文件"
+	})
 	bar.AppendFunc(
 		func(b *uiprogress.Bar) string {
 			// elapsed := b.TimeElapsed()
 			if b.Current() < b.Total {
 				speed_elapsed = time.Now().Sub(speed_start)
 			}
-			speed := uint64(float64(b.Current()) * float64(d.info.ChunkSize) / speed_elapsed.Seconds())
+			speed := uint64(float64(b.Current() - speed_start_pos) * float64(d.info.ChunkSize) / speed_elapsed.Seconds())
+			speed_start = time.Now()
+			speed_start_pos = b.Current()
+
 			return humanize.IBytes(speed) + "/sec"
 		})
 
 //	defer d.boltDB.Close()
 	defer func() {
 		//fmt.Println("uiprogress.Stop()")
-		uiprogress.Stop()
+		progressUI.Stop()
 	}()
 
-	var filechunk int64 = d.info.ChunkSize//2*1024*1024 //1024// we settle for 8KB
+	var filechunk uint64 = d.info.ChunkSize//2*1024*1024 //1024// we settle for 8KB
 	var cNum int = d.conNum
 
 	//checksum2 := checksum(file,filechunk)
@@ -181,12 +191,14 @@ func (d *DownLoader) Download(url string,timeout int) {
 
 	//fmt.Println(err)
 
-	if d.info.FileSize <= int64(cNum)*(int64(filechunk)) {
+	if d.info.FileSize <= uint64(cNum)*(uint64(filechunk)) {
 		cNum = len(d.info.Parts)
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
+
+	var keys []int
 
 	var inum = 0
 	for key, value := range d.info.Parts {
@@ -197,63 +209,27 @@ func (d *DownLoader) Download(url string,timeout int) {
 			d.info.OverIndex++
 		}
 		if value.Flag != DOWNLOAD_FLAG_OK  && inum < cNum {
+			value.Flag = DOWNLOAD_FLAG_DOING
+			keys = append(keys,key)
 			inum++
-			go func(index int) {
-				d.downloadPart(ctx,d.info.Parts[index])
-			}(key)
 		}
 	}
 
-	quitSignal := make(chan int,1)
-	go func() {
-		defer func() {
-			wg.Done()
-		}()
-		for {
-			select {
-			case <-quitSignal:
-				//fmt.Println("quitSignal")
-				return
-			case r := <-d.progress:
-				//fmt.Println(float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))
-				if r.isok {
-					//delete(indexMap,r.index)
-					//boltInfo.IndexMap[r.index] = UPLOAD_FLAG_OK
-					d.info.OverIndex++
-					//bar.Incr()
-					//bar2.Incr(int((float64(1) / float64(len(boltInfo.IndexMap)))*100))
-				}
+	println(d.info.OverIndex)
 
-				bar.Set(int((float64(d.info.OverIndex) / float64(len(d.info.Parts)))*100))
-			}
-		}
+	cNum = len(keys)
 
-		//for i := 1; i <= bar.Total; i++ {
-		/*select {
-		case <-s.chQuit:
-			return
-
-		}*/
-		///	bar.Set(int((float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))*100))
-		///	time.Sleep(time.Millisecond * 100)
-		//}
-	}()
-
-	d.progress <- goResult {
-		-1,
-		false,
-	}
 
 
 	go func() {
 		defer func() {
-			quitSignal <- 1
 			wg.Done()
 		}()
 		overNum := 0
 		for {
 			select {
 			case <-d.chQuit:
+				cancel()
 				//wg.Add(-cNum)
 				//fmt.Println("chQuit")
 				return
@@ -263,6 +239,8 @@ func (d *DownLoader) Download(url string,timeout int) {
 				locker.Lock()
 				if r.isok {
 					//delete(indexMap,r.index)
+					d.info.OverIndex++
+					bar.Set(int((float64(d.info.OverIndex) / float64(len(d.info.Parts)))*100))
 					d.info.Parts[r.index].Flag = DOWNLOAD_FLAG_OK
 				} else {
 					d.info.Parts[r.index].Flag = DOWNLOAD_FLAG_NORMAL
@@ -271,6 +249,7 @@ func (d *DownLoader) Download(url string,timeout int) {
 				for i,v := range d.info.Parts {
 					if v.Flag == DOWNLOAD_FLAG_NORMAL {
 						d.info.Parts[i].Flag = DOWNLOAD_FLAG_DOING
+						goCount++
 						index = i
 						break
 					}
@@ -278,6 +257,7 @@ func (d *DownLoader) Download(url string,timeout int) {
 
 				locker.Unlock()
 				if index > -1 {
+
 					go d.downloadPart(ctx,d.info.Parts[index])
 				} else {
 					overNum++
@@ -291,10 +271,17 @@ func (d *DownLoader) Download(url string,timeout int) {
 		}
 	}()
 
+	goCount += len(keys)
+	for _, value := range keys {
+		go func(index int) {
+			d.downloadPart(ctx,d.info.Parts[index])
+		}(value)
+	}
+
 	wg.Wait()
 
 	if isOver {
-		d.concatenateParts()
+		d.concatenateParts(progressUI)
 	}
 
 	err = d.boltDB.Update(func(tx *bolt.Tx) error {
@@ -307,7 +294,6 @@ func (d *DownLoader) Download(url string,timeout int) {
 		if err1 != nil {
 			return err1
 		}
-
 		err = upload.Put([]byte(d.info.Url), enc)
 		return err
 	})
@@ -316,6 +302,7 @@ func (d *DownLoader) Download(url string,timeout int) {
 		fmt.Printf("save data error:%v",err)
 	}
 	log.Println("exit....")
+	return d.info
 }
 
 func (d*DownLoader)downloadPart(ctx context.Context,p* Part)  {
@@ -333,13 +320,7 @@ func (d*DownLoader)downloadPart(ctx context.Context,p* Part)  {
 				p.Index,
 				bResult,
 			}
-
-			d.progress <- goResult {
-				p.Index,
-				bResult,
-			}
 		}
-
 
 		//fmt.Println("upload over:",qqpartindex)
 	}()
@@ -374,7 +355,7 @@ func (d*DownLoader)downloadPart(ctx context.Context,p* Part)  {
 	//total := p.Stop - p.Start + 1
 	if resp.StatusCode == http.StatusOK  || resp.StatusCode == http.StatusPartialContent{
 		//fmt.Println(resp.StatusCode)
-		dst, err1 := os.Create(fmt.Sprintf("%s/%s/%d.part", downloadDir, d.info.UUid,p.Index))
+		dst, err1 := os.Create(fmt.Sprintf("%s/%s/%d.part", d.info.TargetDir, d.info.UUid,p.Index))
 		if err1 != nil {
 			log.Println("error create file")
 			return
@@ -392,7 +373,7 @@ func (d*DownLoader)downloadPart(ctx context.Context,p* Part)  {
 		fmt.Println(resp.StatusCode)
 	}
 }
-
+/*
 func (d*DownLoader)onCancelSignal(cancel context.CancelFunc) {
 	defer cancel()
 	sigs := make(chan os.Signal, 2)
@@ -402,7 +383,7 @@ func (d*DownLoader)onCancelSignal(cancel context.CancelFunc) {
 	log.Printf("%v: canceling...\n", sig)
 	d.chQuit <- sig
 }
-
+*/
 func (p *Part) getRange() string {
 	if p.Stop <= 0 {
 		return ""
@@ -482,7 +463,7 @@ func (d*DownLoader)follow(fileUrl, outFileName string) (int,error) {
 		d.info.AcceptRanges = resp.Header.Get("Accept-Ranges")
 		d.info.FilePath = outFileName
 		len, err := strconv.ParseInt(resp.Header.Get("Content-Length"),10,0)
-		d.info.FileSize = len
+		d.info.FileSize = uint64(len)
 		//d.info.FileSize = resp.ContentLength
 		d.info.Location = next
 
@@ -563,20 +544,21 @@ func (d*DownLoader)exitOnError(err error) {
 }
 
 func (d *DownLoader) calcParts() {
-	fileDir := fmt.Sprintf("%s/%s", downloadDir, d.info.UUid)
+	fileDir := fmt.Sprintf("%s/%s", d.info.TargetDir, d.info.UUid)
 	if err := os.MkdirAll(fileDir, 0777); err != nil {
 		fmt.Println("MkdirAll error")
 		return
 	}
 
-	partSize := int64(math.Ceil(float64(float64(d.info.FileSize) / float64(d.info.ChunkSize))))
+	partSize := uint64(math.Ceil(float64(float64(d.info.FileSize) / float64(d.info.ChunkSize))))
 	if partSize <= 0 {
 		//return
 		partSize = 1
 	}
+
 	d.info.Parts = make([]*Part, partSize)
 
-	for i := int64(0); i < partSize; i++ {
+	for i := uint64(0); i < partSize; i++ {
 		//stop = start
 		//start = stop - partSize
 		stop := (i+1)*d.info.ChunkSize - 1
@@ -599,16 +581,18 @@ func (d *DownLoader) calcParts() {
 
 
 
-func (d *DownLoader) concatenateParts() error {
+func (d *DownLoader) concatenateParts(progressUI *uiprogress.Progress) error {
 	fmt.Println("concat part files to single file")
 	var wg sync.WaitGroup
 	wg.Add(1)
 
-	bar := uiprogress.AddBar(100).AppendCompleted()
-
+	bar := progressUI.AddBar(100).AppendCompleted()
+	bar.PrependFunc(func(b *uiprogress.Bar) string{
+		return "合并文件"
+	})
 	go func() error {
 		defer wg.Done()
-		finalFilename := fmt.Sprintf("%s/%s/%s", downloadDir, d.info.UUid,d.info.FilePath)
+		finalFilename := fmt.Sprintf("%s/%s/%s", d.info.TargetDir, d.info.UUid,d.info.FilePath)
 
 		f, err := os.Create(finalFilename)
 		if err != nil {
@@ -618,7 +602,7 @@ func (d *DownLoader) concatenateParts() error {
 
 		var totalWritten int64
 		for i := 0; i < len(d.info.Parts); i++ {
-			part := fmt.Sprintf("%s/%s/%d.part", downloadDir, d.info.UUid,i)
+			part := fmt.Sprintf("%s/%s/%d.part", d.info.TargetDir, d.info.UUid,i)
 			fparti, err := os.Open(part)
 			if err != nil {
 				return err
@@ -641,8 +625,8 @@ func (d *DownLoader) concatenateParts() error {
 
 		return nil
 	}()
-	d.info.OverTime = time.Now()
-	wg.Wait()
 
+	wg.Wait()
+	d.info.OverTime = time.Now()
 	return nil
 }

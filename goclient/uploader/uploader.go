@@ -2,7 +2,7 @@ package uploader
 
 import (
 	"math"
-	"crypto/md5"
+
 	"fmt"
 	"os"
 	"sync"
@@ -27,7 +27,8 @@ import (
 	"context"
 	//"github.com/satori/go.uuid"
 	"errors"
-	"github.com/satori/go.uuid"
+	//"github.com/satori/go.uuid"
+	"../utils"
 )
 
 type Uploader struct {
@@ -37,7 +38,6 @@ type Uploader struct {
 	host string
 	pool chan uploadResult
 	chQuit chan os.Signal
-	progress chan uploadResult
 }
 
 
@@ -109,7 +109,6 @@ func New(conNum int,chunkSize uint64,db *bolt.DB,host string,chQuit chan os.Sign
 		host:host,
 		pool:make(chan uploadResult, conNum),
 		chQuit:chQuit,
-		progress:make(chan uploadResult, conNum),
 	}
 }
 
@@ -132,10 +131,7 @@ func (s* Uploader) upload(ctx context.Context,file string,fuid string,filename s
 				qqpartindex,
 				bResult,
 			}
-			s.progress <- uploadResult{
-				qqpartindex,
-				bResult,
-			}
+
 		}
 		//fmt.Println("upload over:",qqpartindex)
 	}()
@@ -418,8 +414,9 @@ func (bolt* BoltUploadStruct)setMapData(key int,value int)  {
 	bolt.IndexMap[key] = value
 }
 
-func (s* Uploader) UploadAll(file string) {
+func (s* Uploader) UploadAll(file string,boltInfo *BoltUploadStruct) *BoltUploadStruct {
 	//fmt.Println("UploadAll")
+
 
 
 	ctx,cancel := context.WithCancel(context.Background())
@@ -442,56 +439,54 @@ func (s* Uploader) UploadAll(file string) {
 		),
 	)*/
 
-	uiprogress.Start()
-	bar := uiprogress.AddBar(100).AppendCompleted()
+
 	//bar.AppendCompleted()
 	//bar.PrependElapsed()
 
-	boltInfo := BoltUploadStruct{}
+	if boltInfo == nil {
+		boltInfo = &BoltUploadStruct{}
+		boltInfo.CheckSum = utils.Checksum(file,s.chunkSize)
+		boltInfo.FilePath = file
+		boltInfo.IsOver = false
 
+		if s.boltDB != nil {
+			s.boltDB.View(func(tx *bolt.Tx) error {
+				b := tx.Bucket([]byte("upload"))
+				if b == nil {
+					return nil
+				}
+				v := b.Get([]byte(boltInfo.CheckSum))
+				//fmt.Printf("%s\n", v)
+				bolt := BoltUploadStruct{}
+				err := json.Unmarshal(v,&bolt)
+				if err == nil {
+					boltInfo = &bolt
+					fmt.Println("start time:",boltInfo.StartTime)
+				}
 
+				return nil
+			})
+		}
+	}
 
-
-
-
-	//defer boltDB.Close()
-	defer func() {
-		//fmt.Println("uiprogress.Stop()")
-		uiprogress.Stop()
-
-	}()
 	log.Printf("Start upload File: %s\n",file)
 
-	boltInfo.CheckSum = s.checksum(file,s.chunkSize)
-	boltInfo.FilePath = file
-	boltInfo.IsOver = false
-
-	if s.boltDB != nil {
-		s.boltDB.View(func(tx *bolt.Tx) error {
-			b := tx.Bucket([]byte("upload"))
-			if b == nil {
-				return nil
-			}
-			v := b.Get([]byte(boltInfo.CheckSum))
-			//fmt.Printf("%s\n", v)
-			bolt := BoltUploadStruct{}
-			err := json.Unmarshal(v,&bolt)
-			if err == nil {
-				boltInfo = bolt
-				fmt.Println("start time:",boltInfo.StartTime)
-			}
-
-			return nil
-		})
-	}
-
-
+	progressUI := uiprogress.New()
 	if boltInfo.IsOver == true {
-		bar.Set(bar.Total)
 		//bar2.Incr(100)
 		log.Println("already upload over")
-		return
+		return boltInfo
 	}
+	//defer boltDB.Close()
+	defer func() {
+		//fmt.Println("progressUI.Stop()")
+		progressUI.Stop()
+
+	}()
+
+	progressUI.Start()
+	bar := progressUI.AddBar(100).AppendCompleted()
+
 	//boltInfo.OverTime = null
 	/*if value, ok := historyMap[boltInfo.CheckSum]; ok {
 		boltInfo = value
@@ -534,7 +529,7 @@ func (s* Uploader) UploadAll(file string) {
 	err = s.preUpload(boltInfo.CheckSum,finfo.Name(),finfo.Size(),int(filechunk))
 	if err != nil {
 		fmt.Println(err)
-		return
+		return boltInfo
 	}
 	//fmt.Println(math.Ceil(3.0/2.0))
 
@@ -542,19 +537,41 @@ func (s* Uploader) UploadAll(file string) {
 
 
 	speed_start := time.Now()
+	speed_start_pos := 0
+	progressUI.SetRefreshInterval(500*time.Millisecond)
+	//取最近5秒速度
 	speed_elapsed := time.Duration(1)
+	/*bar.PrependFunc(func(b *uiprogress.Bar) string {
+		return "80%"
+	})*/
 	bar.AppendFunc(
 		func(b *uiprogress.Bar) string {
 			// elapsed := b.TimeElapsed()
 			if b.Current() < b.Total {
 				speed_elapsed = time.Now().Sub(speed_start)
 			}
-			speed := uint64(float64(b.Current()) * float64(boltInfo.ChunkSize) / speed_elapsed.Seconds())
+			speed := uint64(float64(b.Current() - speed_start_pos) * float64(boltInfo.ChunkSize) / speed_elapsed.Seconds())
+			speed_start = time.Now()
+			speed_start_pos = b.Current()
 			return humanize.IBytes(speed) + "/sec"
+			/*boltInfo.mapLock.Lock()
+			defer boltInfo.mapLock.Unlock()
+			if boltInfo.OverIndex < len(boltInfo.IndexMap) {
+				speed_elapsed = time.Now().Sub(speed_start)
+			}
+			speed := uint64(float64(boltInfo.OverIndex - speed_start_pos) * float64(boltInfo.ChunkSize) / speed_elapsed.Seconds())
+			speed_start = time.Now()
+			speed_start_pos = boltInfo.OverIndex
+
+			percent := fmt.Sprintf("%3.f%% ", (float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap))) * 100.00)
+
+			return percent + humanize.IBytes(speed) + "/sec"
+*/
+
 		})
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
 
 
 	if len(boltInfo.IndexMap) == 0 {
@@ -563,7 +580,7 @@ func (s* Uploader) UploadAll(file string) {
 		for i := 0; i < boltInfo.TotalPart; i++  {
 			boltInfo.setMapData(i,UPLOAD_FLAG_UNKNOW)
 		}
-
+/*
 		for i  := 0; i < cNum;i++  {
 			go func(index int) {
 				boltInfo.setMapData(index,UPLOAD_FLAG_DOING)
@@ -572,8 +589,9 @@ func (s* Uploader) UploadAll(file string) {
 				//
 			}(i)
 		}
+*/
 	} else {
-		var inum = 0
+//		var inum = 0
 
 		for key, value := range boltInfo.IndexMap {
 			if value == UPLOAD_FLAG_DOING {
@@ -583,7 +601,7 @@ func (s* Uploader) UploadAll(file string) {
 			if value == UPLOAD_FLAG_OK {
 				boltInfo.OverIndex++
 			}
-
+/*
 			if value != UPLOAD_FLAG_OK  && inum < cNum {
 				inum++
 				boltInfo.setMapData(key,UPLOAD_FLAG_DOING)
@@ -592,56 +610,29 @@ func (s* Uploader) UploadAll(file string) {
 					//
 				}(key)
 			}
+*/
 		}
 	}
 
+	var keys []int
 
-
-	quitSignal := make(chan int,1)
-	go func() {
-		defer func() {
-			wg.Done()
-		}()
-		for {
-			select {
-			case <-quitSignal:
-				//fmt.Println("quitSignal")
-				return
-			case r := <-s.progress:
-				//fmt.Println(float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))
-				if r.isok {
-					//delete(indexMap,r.index)
-					//boltInfo.IndexMap[r.index] = UPLOAD_FLAG_OK
-					boltInfo.OverIndex++
-					//bar.Incr()
-					//bar2.Incr(int((float64(1) / float64(len(boltInfo.IndexMap)))*100))
-				}
-				boltInfo.mapLock.Lock()
-				bar.Set(int((float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))*100))
-				boltInfo.mapLock.Unlock()
+	func() {
+		boltInfo.mapLock.Lock()
+		var inum = 0
+		for key, value := range boltInfo.IndexMap {
+			if value != UPLOAD_FLAG_OK  && inum < cNum {
+				inum++
+				boltInfo.IndexMap[key] = UPLOAD_FLAG_DOING
+				keys = append(keys,key)
 			}
 		}
-
-		//for i := 1; i <= bar.Total; i++ {
-		/*select {
-		case <-s.chQuit:
-			return
-
-		}*/
-		///	bar.Set(int((float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))*100))
-		///	time.Sleep(time.Millisecond * 100)
-		//}
+		boltInfo.mapLock.Unlock()
 	}()
-
-	s.progress <- uploadResult {
-		-1,
-		false,
-	}
-
+	
+	cNum = len(keys)
 
 	go func() {
 		defer func() {
-			quitSignal <- 1
 			wg.Done()
 		}()
 		overIndex := 0
@@ -656,14 +647,18 @@ func (s* Uploader) UploadAll(file string) {
 				//fmt.Println("Acquire:共享资源",r.index)
 				var index = -1
 
+
+				boltInfo.mapLock.Lock()
 				if r.isok {
 					//delete(indexMap,r.index)
-					boltInfo.setMapData(r.index,UPLOAD_FLAG_OK)
+					boltInfo.OverIndex++
+					bar.Set(int((float64(boltInfo.OverIndex) / float64(len(boltInfo.IndexMap)))*100))
+					boltInfo.IndexMap[r.index] = UPLOAD_FLAG_OK
 				} else {
-					boltInfo.setMapData(r.index,UPLOAD_FLAG_UNKNOW)
+					boltInfo.IndexMap[r.index] = UPLOAD_FLAG_UNKNOW
 					//time.Sleep(time.Millisecond * 100)
 				}
-				boltInfo.mapLock.Lock()
+
 				for i,v := range boltInfo.IndexMap {
 					if v == UPLOAD_FLAG_UNKNOW {
 						boltInfo.IndexMap[i] = UPLOAD_FLAG_DOING
@@ -679,6 +674,7 @@ func (s* Uploader) UploadAll(file string) {
 					if finfo.Size() <= int64(uint64(index+1) * filechunk) {
 						size = finfo.Size() - int64(uint64(index) * filechunk)
 					}
+
 					go s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(size),qqtotalparts)
 				} else {
 					overIndex++
@@ -692,13 +688,21 @@ func (s* Uploader) UploadAll(file string) {
 		}
 	}()
 
+	for _, value := range keys {
+		go func(index int) {
+			s.upload(ctx,file,boltInfo.CheckSum,finfo.Name(),finfo.Size(),index,int64(index)*int64(filechunk),int64(filechunk),qqtotalparts)
+			//
+		}(value)
+	}
+
 	wg.Wait()
 
-
+	//fmt.Println(boltInfo.OverIndex,len(boltInfo.IndexMap))
 	var allOver bool = true
 	boltInfo.mapLock.Lock()
-	for _,v := range boltInfo.IndexMap {
+	for k,v := range boltInfo.IndexMap {
 		if v != 1 {
+			//fmt.Println(k)
 			allOver = false
 			break
 		}
@@ -735,55 +739,19 @@ func (s* Uploader) UploadAll(file string) {
 			if err != nil {
 				return fmt.Errorf("create bucket: %s", err)
 			}
-
 			enc, err1 := json.Marshal(boltInfo)
 			if err1 != nil {
 				return err1
 			}
-
 			err = upload.Put([]byte(boltInfo.CheckSum), enc)
 			return err
 		})
-
 		if err != nil {
-			fmt.Printf("save data error:%v",err)
+			fmt.Printf("save data error:%v\n",err)
+		} else {
+			fmt.Println("save upload in database")
 		}
 	}
 
-
-}
-
-func (s* Uploader) checksum(path string ,chuncksize uint64) string {
-
-
-	file, err := os.Open(path)
-
-	if err != nil {
-		panic(err.Error())
-	}
-
-	defer file.Close()
-
-	// calculate the file size
-	info, _ := file.Stat()
-
-	filesize := info.Size()
-
-	blocks := uint64(math.Ceil(float64(filesize) / float64(chuncksize)))
-
-	hash := md5.New()
-
-	for i := uint64(0); i < blocks; i++ {
-		blocksize := int(math.Min(float64(chuncksize), float64(filesize-int64(i*chuncksize))))
-		buf := make([]byte, blocksize)
-
-		file.Read(buf)
-		io.WriteString(hash, string(buf)) // append into the hash
-	}
-	var bytes []byte
-	bytes = hash.Sum(nil)
-	retStr := fmt.Sprintf("%x",bytes)
-	fmt.Printf("checksum is %s \n",retStr )
-
-	return retStr
+	return boltInfo
 }

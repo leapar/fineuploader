@@ -6,11 +6,14 @@ import (
 	DownLoader"../download"
 	"github.com/boltdb/bolt"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func Download()  cli.Command {
 	var url string
-	var chunckSize int64
+	var chunckSize uint64
 	//"https://raw.githubusercontent.com/alvatar/multipart-downloader/master/test/quijote.txt"
 	return cli.Command{
 		Name:    "download",
@@ -35,7 +38,7 @@ func Download()  cli.Command {
 				Usage:       "con Num",
 				Destination: &conNum,
 			},
-			cli.Int64Flag{
+			cli.Uint64Flag{
 				Name:        "chunck,c",
 				Value:       2*1024*1024,
 				Usage:       "chunck size",
@@ -50,9 +53,12 @@ func Download()  cli.Command {
 			}
 
 			defer boltDB.Close()
+			chQuit := make(chan os.Signal, 1)
+
+			signal.Notify(chQuit, syscall.SIGINT, syscall.SIGTERM)
 			//fmt.Println("completed task: ", c.Args().First())
-			downloader := DownLoader.New(chunckSize,conNum,boltDB)
-			downloader.Download(url,10)
+			downloader := DownLoader.New(chunckSize,conNum,boltDB,chQuit)
+			downloader.Download(url,10,nil)
 			return nil
 		},
 	}

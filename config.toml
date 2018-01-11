@@ -1,6 +1,6 @@
 [server]
     output = "direct"
-    storage = "hdfs"
+    storage = "mongodb"
     host = "0.0.0.0"
     port = 8089
 
@@ -14,8 +14,12 @@
     nsqd = "192.168.0.135:4150"
     topic = "file"
 
-[storage.mongodb]
+[input.mongodb]
     url = "192.168.0.135:27017"
+    md5 = "87847b63d1da669dbc8b52670d03b0c5"
+
+[storage.mongodb]
+    url = "192.168.10.10:27017"
 
 [storage.file]
     directory = "uploads"
