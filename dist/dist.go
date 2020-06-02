@@ -2,15 +2,20 @@ package dist
 
 //go:generate go-bindata -o dist_gen.go -ignore 'map|go' -pkg dist ../ui/...
 
+/*
+执行go generate
+*/
 import (
 	"fmt"
 	"net/http"
 
 	"github.com/elazarl/go-bindata-assetfs"
+	"github.com/gin-gonic/gin"
 )
 
 type Assets interface {
 	Handler() http.Handler
+	FileSystem() http.FileSystem
 }
 
 // DebugAssets serves assets via a specified directory
@@ -23,6 +28,11 @@ type DebugAssets struct {
 func (d *DebugAssets) Handler() http.Handler {
 	return http.FileServer(NewDir(d.Dir, d.Default))
 }
+
+func (d *DebugAssets) FileSystem() http.FileSystem {
+	return gin.Dir(d.Dir,true)
+}
+
 
 // BindataAssets serves assets from go-bindata, but, also serves Default if assent doesn't exist
 // This is to support single-page react-apps with its own router.
@@ -89,4 +99,13 @@ func (b *BindataAssets) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Prefix:    b.Prefix,
 	}
 	http.FileServer(dir).ServeHTTP(w, r)
+}
+
+func (b *BindataAssets) FileSystem() http.FileSystem {
+	return &assetfs.AssetFS{
+		Asset:     Asset,
+		AssetDir:  AssetDir,
+		AssetInfo: AssetInfo,
+		Prefix:    b.Prefix,
+	}
 }

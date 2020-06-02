@@ -1,14 +1,14 @@
 package plugins
 
 import (
-	"sync"
-	"../../input"
-	"../../def"
-	"../../config"
-	"github.com/nsqio/go-nsq"
+	"fineuploader/config"
+	"fineuploader/def"
+	"fineuploader/input"
 	"fmt"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/nsqio/go-nsq"
 	"github.com/qgymje/nsqpool"
+	"gopkg.in/mgo.v2/bson"
+	"sync"
 )
 
 type IutputNSQ struct {

@@ -1,7 +1,7 @@
 package output
 import (
-	"../def"
-	"../config"
+	"fineuploader/def"
+	"fineuploader/config"
 )
 
 var Outputs = map[string]Creator{}

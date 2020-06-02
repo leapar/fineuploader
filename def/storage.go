@@ -18,7 +18,7 @@ type Storager interface {
 		totalPart int,
 		offset int,
 		index int,
-		datas []byte)
+		datas []byte) error
 
 
 

@@ -1,7 +1,7 @@
 package storage
 import (
-	"../def"
-	"../config"
+	"fineuploader/def"
+	"fineuploader/config"
 )
 
 var Storages = map[string]Creator{}

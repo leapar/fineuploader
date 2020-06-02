@@ -1,8 +1,9 @@
 [server]
     output = "direct"
-    storage = "mongodb"
+    storage = "file"
     host = "0.0.0.0"
     port = 8089
+    restServer = "http://127.0.0.1:8080/mpp/"
 
 [input.nsq]
     enable = false
@@ -19,7 +20,8 @@
     md5 = "87847b63d1da669dbc8b52670d03b0c5"
 
 [storage.mongodb]
-    url = "192.168.10.10:27017"
+    #url = "192.168.10.10:27017"
+    url = "192.168.10.11:10004"
 
 [storage.file]
     directory = "uploads"

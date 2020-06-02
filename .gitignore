@@ -31,3 +31,5 @@ goclient/null
 GOPATH
 uploader.db
 *.db
+
+vendor/

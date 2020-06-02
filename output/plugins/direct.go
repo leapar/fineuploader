@@ -1,10 +1,10 @@
 package plugins
 
 import (
-	"../../def"
-	"../../config"
+	"fineuploader/def"
+	"fineuploader/config"
 	"time"
-	"../../output"
+	"fineuploader/output"
 )
 
 type OutputDirect struct {

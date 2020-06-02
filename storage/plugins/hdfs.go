@@ -1,20 +1,20 @@
 package plugins
 
 import (
+	"fineuploader/config"
+	"fineuploader/def"
+	"fineuploader/hdfspool"
+	"fineuploader/storage"
+	"fineuploader/utils"
 	"fmt"
-	"net/http"
-	"sync"
-	"../../storage"
-	"../../def"
-	"../../config"
 	"github.com/colinmarc/hdfs"
-	"../../hdfspool"
-	"log"
-	"strings"
-	"strconv"
-	"../../utils"
 	"io"
+	"log"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -101,6 +101,30 @@ func (srv *Hdfs)GetFinalFileID(cookie string, uuid string,chunkSize int,totalFil
 	return nil
 }
 
+/*
+// Rename renames (moves) a file.
+func (c *Client) Concat(oldpath string ,sources []string) error {
+
+	req := &hdfs.ConcatRequestProto{
+		Trg:           proto.String(oldpath),
+		Srcs:          sources,
+	}
+	resp := &hdfs.ConcatResponseProto{}
+
+	err := c.namenode.Execute("concat", req, resp)
+	if err != nil {
+		if nnErr, ok := err.(*rpc.NamenodeError); ok {
+			err = interpretException(nnErr.Exception, err)
+		}
+
+		return &os.PathError{"concat", oldpath, err}
+	}
+
+	return nil
+}
+
+*/
+
 func (this *Hdfs)UploadDoneHandler(uuid string,file_id string,filename string,totalpart int) {
 	var sources []string
 	sources = make([]string,totalpart-1)
@@ -159,7 +183,7 @@ func (srv *Hdfs) WriteGridFile(filename string,
 	totalPart int,
 	offset int,
 	index int,
-	datas []byte)  {
+	datas []byte) error {
 
 	filepath := fmt.Sprintf("/%s/%s",def.DATA_BASE,filename)
 	client,err := srv.hdfspool.Get()
@@ -173,21 +197,25 @@ func (srv *Hdfs) WriteGridFile(filename string,
 	w,err := client.Create(filepath)
 	if err != nil {
 		fmt.Println(err)
-		panic(err)
+		//panic(err)
+		return err
 	}
 	defer w.Close()
 
-	w.Write(datas)
+	_,err = w.Write(datas)
 	if err != nil {
 		fmt.Println(err)
-		panic(err)
+		//panic(err)
+		return err
 	}
+
+	return nil
 }
 
 func (srv*Hdfs)PacketChunks(cookie string,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) (out []byte,oid string) {
 	return datas,""
 }
-
+/*
 func (srv*Hdfs)WriteChunkPacket3(index int,datas []byte,fileid string,uuid string){
 	filepath := fmt.Sprintf("/%s/%s.part",def.DATA_BASE,uuid)
 	client,err := srv.hdfspool.Get()
@@ -225,7 +253,7 @@ func (srv*Hdfs)WriteChunkPacket3(index int,datas []byte,fileid string,uuid strin
 		fmt.Println(n,err)
 		panic(err)
 	}
-}
+}*/
 
 func (srv*Hdfs)WriteChunkPacket(index int,datas []byte,fileid string,uuid string){
 	filepath := fmt.Sprintf("/%s/%s_%d.part",def.DATA_BASE,uuid,index)

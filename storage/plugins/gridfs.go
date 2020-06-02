@@ -1,22 +1,20 @@
 package plugins
 
 import (
-	"log"
-	"gopkg.in/mgo.v2/bson"
+	"fineuploader/config"
+	"fineuploader/def"
+	"fineuploader/storage"
+	"fineuploader/utils"
 	"fmt"
-	"time"
-	"net/http"
 	"gopkg.in/mgo.v2"
-	"sync"
-	"strings"
-	"strconv"
+	"gopkg.in/mgo.v2/bson"
+	"log"
 	"math"
-	"../../storage"
-	"../../utils"
-	"../../def"
-	"../../config"
-	"github.com/valyala/bytebufferpool"
-
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 type OutputGridfs struct {
@@ -157,9 +155,7 @@ func (srv *OutputGridfs) WriteGridFile(filename string,
 	totalPart int,
 	offset int,
 	index int,
-	datas []byte)  {
-
-
+	datas []byte) error {
 
 	session := srv.session.Copy()
 	defer session.Close()
@@ -171,8 +167,8 @@ func (srv *OutputGridfs) WriteGridFile(filename string,
 	if err != nil {
 		def.DBErrCount.Inc(1)
 		log.Println(err)
-		panic(err)
-		return
+		//panic(err)
+		return err
 	}
 	defer gridFile.Close()
 	gridFile.SetChunkSize(chunkSize)
@@ -196,10 +192,11 @@ func (srv *OutputGridfs) WriteGridFile(filename string,
 	_,err = gridFile.Write(datas)
 	if err != nil{
 		def.DBErrCount.Inc(1)
-		panic(err)
+		//panic(err)
+		return err
 	}
 
-
+	return nil
 }
 
 func (srv*OutputGridfs)WriteChunks(cookie string,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) string {
@@ -221,15 +218,16 @@ func (srv*OutputGridfs)PacketChunks(cookie string,index int,datas []byte,uuid st
 
 	id = srv.GetFinalFileID(cookie,uuid,chunkSize,totalSize,filename).(bson.ObjectId)
 
-	buf := bytebufferpool.Get()
+	/*buf := bytebufferpool.Get()
 	defer func() {
 		if buf != nil {
 			bytebufferpool.Put(buf)
 		}
 	}()
+	*/
 	var err error
 	//fmt.Printf("%d %v %s\n",len(datas),unsafe.Pointer(&datas),"  in")
-	datas, err = bson.MarshalBuffer(def.GfsChunk{bson.NewObjectId(), id, index, datas},buf.Bytes())
+	datas, err = bson.Marshal(def.GfsChunk{bson.NewObjectId(), id, index, datas})
 	//fmt.Printf("%d %v %s\n",len(datas),unsafe.Pointer(&datas),"  out")
 
 	if err != nil {

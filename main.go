@@ -1,11 +1,11 @@
 package main
 
 import (
-	"os"
-	"gopkg.in/urfave/cli.v1"
-	"./commands"
-	"gopkg.in/urfave/cli.v1/altsrc"
+	"fineuploader/commands"
 	"fmt"
+	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v2/altsrc"
+	"os"
 	"sort"
 )
 
@@ -20,7 +20,7 @@ func main() {
 		commands.Server(),
 	}*/
 	flags := []cli.Flag{
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name: "config",
 			Value: "config.toml",
 			Usage: "Configuration file",
@@ -37,10 +37,10 @@ func main() {
 func registerCommand(app *cli.App, flags []cli.Flag, cmd cli.Command) {
 
 	cmd.Flags = append(flags, cmd.Flags...)
-	cmd.Action = newCommandAction(cmd.Action.(func(c *cli.Context) error))
+	cmd.Action = newCommandAction(cmd.Action)
 	cmd.Before = newConfigLoader("config", cmd.Flags)
 
-	app.Commands = append(app.Commands, cmd)
+	app.Commands = append(app.Commands, &cmd)
 }
 
 func newConfigLoader(name string, flags []cli.Flag) cli.BeforeFunc {
@@ -104,9 +104,18 @@ func findFlag(name string, flags []cli.Flag) (cli.StringFlag, bool) {
 	found := false
 
 	for _, f := range flags {
-		if sf, ok := f.(cli.StringFlag); ok && f.GetName() == name {
-			flag = sf
-			found = true
+		sf, ok := f.(*cli.StringFlag)
+		if ok {
+			for i := 0; i < len(f.Names()); i++ {
+				if f.Names()[i] == name {
+					flag = *sf
+					found = true
+					break
+				}
+			}
+		}
+
+		if found {
 			break
 		}
 	}

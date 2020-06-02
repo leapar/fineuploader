@@ -1,11 +1,12 @@
 package config
 
-import "../def"
+import "fineuploader/def"
 
 
 type Config struct {
 	Host string
 	Port int
+	RestServer string
 	Output string
 	OutputMongo MongoConfig
 	OutputNsq NsqConfig

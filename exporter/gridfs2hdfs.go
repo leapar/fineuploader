@@ -1,16 +1,16 @@
 package exporter
 
 import (
-	"../config"
-	"gopkg.in/mgo.v2"
-	"log"
-	"../def"
-	"github.com/colinmarc/hdfs"
+	"fineuploader/config"
+	"fineuploader/def"
+	"fineuploader/hdfspool"
 	"fmt"
-	"../hdfspool"
+	"github.com/cheggaaa/pb/v3"
+	"github.com/colinmarc/hdfs"
+	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"io"
-	"github.com/cheggaaa/pb"
+	"log"
 )
 
 type Gridfs2Hdfs struct {
@@ -109,6 +109,7 @@ func (this *Gridfs2Hdfs) Start() {
 	defer f.Close()
 
 	bar := pb.New(int(objFile.Length))
+	/*
 	// show percents (by default already true)
 	bar.ShowPercent = true
 	// show bar (by default already true)
@@ -124,7 +125,9 @@ func (this *Gridfs2Hdfs) Start() {
 	// sets the width of the progress bar, but if terminal size smaller will be ignored
 	//bar.SetMaxWidth(80)
 	// convert output to readable format (like KB, MB)
-	bar.SetUnits(pb.U_BYTES)
+	*/
+
+	bar.Set(pb.Bytes, true)
 	bar.Start()
 
 	reader := bar.NewProxyReader(file)

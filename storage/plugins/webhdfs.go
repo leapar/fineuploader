@@ -1,20 +1,20 @@
 package plugins
 
 import (
-	"log"
-	"fmt"
-	"net/http"
-	"sync"
-	"../../storage"
-	"../../def"
-	"../../config"
-	"github.com/vladimirvivien/gowfs"
 	"bytes"
-	"strconv"
+	"fineuploader/config"
+	"fineuploader/def"
+	"fineuploader/storage"
+	"fineuploader/utils"
+	"fmt"
+	"github.com/vladimirvivien/gowfs"
 	"io"
-	"strings"
-	"../../utils"
+	"log"
+	"net/http"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 )
 
 type WebHdfs struct {
@@ -80,7 +80,7 @@ func (srv *WebHdfs) WriteGridFile(filename string,
 	totalPart int,
 	offset int,
 	index int,
-	datas []byte)  {
+	datas []byte) error {
 
 	b,err := srv.fs.Create(bytes.NewBuffer(datas),
 			gowfs.Path{Name: fmt.Sprintf("/%s/%s",def.DATA_BASE,filename)},
@@ -91,8 +91,11 @@ func (srv *WebHdfs) WriteGridFile(filename string,
 			uint(len(datas)))
 	if err != nil {
 		fmt.Println(b,err)
-		panic(err)
+		//panic(err)
+		return err
 	}
+
+	return nil
 }
 
 func (srv*WebHdfs)PacketChunks(cookie string,index int,datas []byte,uuid string,chunkSize int,totalSize int,filename string) (out []byte,oid string) {

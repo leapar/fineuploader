@@ -2,13 +2,13 @@ package plugins
 
 import (
 	"sync"
-	"../../def"
-	"../../config"
+	"fineuploader/def"
+	"fineuploader/config"
 	"github.com/nsqio/go-nsq"
 	"time"
 	"fmt"
 	"github.com/qgymje/nsqpool"
-	"../../output"
+	"fineuploader/output"
 )
 
 type OutputNSQ struct {

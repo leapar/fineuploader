@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"../dist"
+	"fineuploader/dist"
 )
 
 const (
@@ -46,4 +46,22 @@ func Assets(opts AssetsOpts) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assets.Handler().ServeHTTP(w, r)
 	})
+}
+
+func AssetsFS(opts AssetsOpts) http.FileSystem {
+	var assets dist.Assets
+	if opts.Develop {
+		assets = &dist.DebugAssets{
+			Dir:     DebugDir,
+			Default: DebugDefault,
+		}
+	} else {
+		assets = &dist.BindataAssets{
+			Prefix:             Dir,
+			Default:            Default,
+			DefaultContentType: DefaultContentType,
+		}
+	}
+
+	return assets.FileSystem()
 }
